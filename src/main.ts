@@ -1,5 +1,5 @@
 import './style.css'
-import { Peer } from 'peerjs' // MediaConnectionは使わないので削除して警告を消しました
+import { Peer } from 'peerjs'
 import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
@@ -31,14 +31,16 @@ const selfieSegmentation = new SelfieSegmentation({
 });
 
 selfieSegmentation.setOptions({ modelSelection: 1 });
+
 selfieSegmentation.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  
-  // マスク（人間の形）を描画
-  ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
 
-  // 背景の描画設定（人間以外の部分）
+  // 1. 人間の部分だけを切り抜くパスを作成
+  ctx.beginPath();
+  ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
+  
+  // 2. 背景を描画（ぼかし判定）
   ctx.globalCompositeOperation = 'source-out';
   if (isBlurred) {
     ctx.filter = 'blur(10px)';
@@ -46,20 +48,21 @@ selfieSegmentation.onResults((results) => {
   ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   ctx.filter = 'none';
 
-  // 人間の描画設定（背景の上に人間を乗せる）
+  // 3. 人間をくっきり重ねる
   ctx.globalCompositeOperation = 'destination-over';
   ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+  
   ctx.restore();
 });
 
-// カメラ開始とAI処理のループ
+// カメラ開始と通信用ストリームの準備
 navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
   video.srcObject = stream;
   video.play();
   
-  // Canvasの映像を「通信用のストリーム」に変換する
-  processedStream = canvas.captureStream(30).clone();
-  // 音声を追加する
+  // Canvasの映像をストリーム（映像データ）に変換
+  processedStream = canvas.captureStream(30);
+  // 本物のマイク音声を合体させる
   stream.getAudioTracks().forEach(track => processedStream.addTrack(track));
 
   const sendVideo = async () => {
@@ -77,28 +80,28 @@ document.querySelector('#blur-btn')?.addEventListener('click', () => {
   btn.style.backgroundColor = isBlurred ? '#f44336' : '#4CAF50';
 });
 
-// PeerJSの接続処理
+// --- ここから PeerJS (通信) の処理 ---
 const peer = new Peer();
 
 peer.on('open', id => {
   statusDisplay.innerText = `あなたのID: ${id}`;
 });
 
-// 相手からの着信
+// 誰かからかかってきた時
 peer.on('call', (call) => {
-  call.answer(processedStream); // 加工した映像を相手に送る
-  handleCall(call);
+  call.answer(processedStream); // 背景ボケ映像を返してあげる
+  setupVideoCall(call);
 });
 
-// 自分から発信
+// 自分からかける時
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const remoteId = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
   if (!remoteId) return alert('IDを入力してください');
   const call = peer.call(remoteId, processedStream);
-  handleCall(call);
+  setupVideoCall(call);
 });
 
-function handleCall(call: any) {
+function setupVideoCall(call: any) {
   const videoGrid = document.querySelector('#video-grid')!;
   const remoteVideo = document.createElement('video');
   remoteVideo.style.width = "300px";
