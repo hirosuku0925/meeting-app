@@ -14,15 +14,14 @@ const createRoomBtn = document.querySelector<HTMLButtonElement>('#create-room');
 const roomDisplay = document.querySelector<HTMLParagraphElement>('#room-display');
 
 createRoomBtn?.addEventListener('click', () => {
-  // 6桁のランダムな英数字を作成
+  // 6桁のランダムなルームコードを作成
   const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
   
-  // 画面に表示
   if (roomDisplay) {
     roomDisplay.innerText = `ルームコード: ${roomCode}`;
   }
   
-  // URLにルームIDを追加（画面はリロードされない）
+  // URLにルームIDを付けて、友達に共有しやすくする
   const newUrl = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
   window.history.pushState({ path: newUrl }, '', newUrl);
   
