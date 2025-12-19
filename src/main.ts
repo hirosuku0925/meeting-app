@@ -1,24 +1,30 @@
 import './style.css'
-import typescriptLogo from './typescript.svg'
-import viteLogo from '/vite.svg'
-import { setupCounter } from './counter.ts'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div>
-    <a href="https://vite.dev" target="_blank">
-      <img src="${viteLogo}" class="logo" alt="Vite logo" />
-    </a>
-    <a href="https://www.typescriptlang.org/" target="_blank">
-      <img src="${typescriptLogo}" class="logo vanilla" alt="TypeScript logo" />
-    </a>
-    <h1>Vite + TypeScript</h1>
+    <h1>会議アプリ</h1>
     <div class="card">
-      <button id="counter" type="button"></button>
+      <button id="create-room" type="button">ルームコードを発行</button>
+      <p id="room-display" style="margin-top: 20px; font-weight: bold; font-size: 1.2em; color: #646cff;"></p>
     </div>
-    <p class="read-the-docs">
-      Click on the Vite and TypeScript logos to learn more
-    </p>
   </div>
 `
 
-setupCounter(document.querySelector<HTMLButtonElement>('#counter')!)
+const createRoomBtn = document.querySelector<HTMLButtonElement>('#create-room');
+const roomDisplay = document.querySelector<HTMLParagraphElement>('#room-display');
+
+createRoomBtn?.addEventListener('click', () => {
+  // 6桁のランダムな英数字を作成
+  const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+  
+  // 画面に表示
+  if (roomDisplay) {
+    roomDisplay.innerText = `ルームコード: ${roomCode}`;
+  }
+  
+  // URLにルームIDを追加（画面はリロードされない）
+  const newUrl = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
+  window.history.pushState({ path: newUrl }, '', newUrl);
+  
+  alert(`ルームを作成しました！\nコード: ${roomCode}`);
+});
