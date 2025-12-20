@@ -2,14 +2,21 @@ import './style.css'
 import { Peer, MediaConnection } from 'peerjs'
 import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 
+// 名前を保持する変数
+let myName = "";
+
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div>
-    <h1>AIバーチャル背景 & 画面・音声共有 会議室</h1>
+    <h1>AIバーチャル背景 & 画面共有 会議室</h1>
     <div id="video-grid" style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; padding: 20px;">
-      <canvas id="local-canvas" width="480" height="360" style="width: 300px; border: 2px solid #646cff; border-radius: 10px;"></canvas>
+      <div class="video-container" style="position: relative;">
+        <canvas id="local-canvas" width="480" height="360" style="width: 300px; border: 2px solid #646cff; border-radius: 10px;"></canvas>
+        <div id="my-name-label" style="position: absolute; bottom: 10px; left: 10px; background: rgba(0,0,0,0.5); color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px;">自分</div>
+      </div>
     </div>
     <div class="card">
       <div style="margin-bottom: 10px; display: flex; flex-direction: column; gap: 10px; align-items: center;">
+        <input id="name-input" type="text" placeholder="あなたの表示名を入力" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc;">
         <div style="display: flex; gap: 5px; flex-wrap: wrap; justify-content: center;">
           <button id="blur-btn" style="background-color: #4CAF50;">背景ぼかし: OFF</button>
           <button id="share-btn" style="background-color: #2196F3;">画面・音声を共有</button>
@@ -34,6 +41,7 @@ const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const statusDisplay = document.querySelector<HTMLParagraphElement>('#status')!;
 const bgInput = document.querySelector<HTMLInputElement>('#bg-upload')!;
 const shareBtn = document.querySelector<HTMLButtonElement>('#share-btn')!;
+const nameInput = document.querySelector<HTMLInputElement>('#name-input')!;
 
 let isBlurred = false;
 let isScreenSharing = false;
@@ -41,7 +49,6 @@ let customBgImage: HTMLImageElement | null = null;
 let processedStream: MediaStream;
 let activeCalls: MediaConnection[] = [];
 let localCameraStream: MediaStream;
-// 警告が出ていた screenAudioStream は削除しました
 
 const selfieSegmentation = new SelfieSegmentation({
   locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`
@@ -90,21 +97,30 @@ async function startCamera() {
 }
 startCamera();
 
+// 名前の更新
+nameInput.addEventListener('input', () => {
+  myName = nameInput.value;
+  document.querySelector('#my-name-label')!.textContent = myName || "自分";
+});
+
+// 画面共有ボタンの修正
 shareBtn.addEventListener('click', async () => {
   if (!isScreenSharing) {
     try {
       const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      
+      // 送信ストリームの映像を画面共有のものに差し替える
+      const videoTrack = screenStream.getVideoTracks()[0];
+      const sender = processedStream.getVideoTracks()[0];
+      if (sender) processedStream.removeTrack(sender);
+      processedStream.addTrack(videoTrack);
+
       video.srcObject = screenStream;
       isScreenSharing = true;
       shareBtn.innerText = "共有を停止";
       shareBtn.style.backgroundColor = "#ff9800";
 
-      const audioTrack = screenStream.getAudioTracks()[0];
-      if (audioTrack) {
-        processedStream.addTrack(audioTrack);
-      }
-
-      screenStream.getVideoTracks()[0].onended = () => stopScreenShare();
+      videoTrack.onended = () => stopScreenShare();
     } catch (err) {
       console.error("画面共有に失敗:", err);
     }
@@ -114,18 +130,16 @@ shareBtn.addEventListener('click', async () => {
 });
 
 function stopScreenShare() {
+  // 元のカメラ映像トラックに戻す
+  const videoTrack = localCameraStream.getVideoTracks()[0];
+  const sender = processedStream.getVideoTracks()[0];
+  if (sender) processedStream.removeTrack(sender);
+  processedStream.addTrack(videoTrack);
+
   video.srcObject = localCameraStream;
   isScreenSharing = false;
   shareBtn.innerText = "画面・音声を共有";
   shareBtn.style.backgroundColor = "#2196F3";
-  
-  processedStream.getAudioTracks().forEach(track => {
-    // 画面共有の音声トラック（ラベルが空、または Screen を含むもの）を停止して削除
-    if (track.label.includes("Screen") || track.label === "") {
-        track.stop();
-        processedStream.removeTrack(track);
-    }
-  });
 }
 
 bgInput.addEventListener('change', (e) => {
@@ -157,30 +171,53 @@ document.querySelector('#blur-btn')?.addEventListener('click', () => {
 
 const peer = new Peer();
 peer.on('open', id => { statusDisplay.innerText = `あなたのID: ${id}`; });
+
+// 着信時：名前データも受け取れるように拡張
 peer.on('call', (call) => {
+  // 相手の名前をmetadataから取得（後述の接続側で送る）
+  const remoteName = (call.metadata && call.metadata.name) ? call.metadata.name : "ゲスト";
   call.answer(processedStream);
   activeCalls.push(call);
-  setupVideoCall(call);
+  setupVideoCall(call, remoteName);
 });
 
+// 接続時：自分の名前を一緒に送る
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const remoteId = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
   if (!remoteId) return alert('IDを入力してください');
-  const call = peer.call(remoteId, processedStream);
+  
+  // 名前をmetadataに載せて送る
+  const call = peer.call(remoteId, processedStream, {
+    metadata: { name: myName || "ゲスト" }
+  });
+  
   activeCalls.push(call);
-  setupVideoCall(call);
+  setupVideoCall(call, "相手"); 
 });
 
-function setupVideoCall(call: MediaConnection) {
+function setupVideoCall(call: MediaConnection, name: string) {
   const videoGrid = document.querySelector('#video-grid')!;
+  
+  // ビデオと名前をセットにするコンテナ
+  const container = document.createElement('div');
+  container.style.position = "relative";
+  
   const remoteVideo = document.createElement('video');
   remoteVideo.style.width = "300px";
   remoteVideo.style.borderRadius = "10px";
   remoteVideo.autoplay = true;
   remoteVideo.playsInline = true;
+
+  const nameLabel = document.createElement('div');
+  nameLabel.innerText = name;
+  nameLabel.style.cssText = "position: absolute; bottom: 10px; left: 10px; background: rgba(0,0,0,0.5); color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px;";
+
+  container.appendChild(remoteVideo);
+  container.appendChild(nameLabel);
+
   call.on('stream', (stream: MediaStream) => {
     remoteVideo.srcObject = stream;
-    videoGrid.appendChild(remoteVideo);
+    videoGrid.appendChild(container);
   });
-  call.on('close', () => remoteVideo.remove());
+  call.on('close', () => container.remove());
 }
