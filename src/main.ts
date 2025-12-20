@@ -4,7 +4,7 @@ import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div>
-    <h1>AIバーチャル背景 & 画面共有 会議室</h1>
+    <h1>AIバーチャル背景 & 画面・音声共有 会議室</h1>
     <div id="video-grid" style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; padding: 20px;">
       <canvas id="local-canvas" width="480" height="360" style="width: 300px; border: 2px solid #646cff; border-radius: 10px;"></canvas>
     </div>
@@ -12,7 +12,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div style="margin-bottom: 10px; display: flex; flex-direction: column; gap: 10px; align-items: center;">
         <div style="display: flex; gap: 5px; flex-wrap: wrap; justify-content: center;">
           <button id="blur-btn" style="background-color: #4CAF50;">背景ぼかし: OFF</button>
-          <button id="share-btn" style="background-color: #2196F3;">画面共有を開始</button>
+          <button id="share-btn" style="background-color: #2196F3;">画面・音声を共有</button>
           <button id="hangup-btn" style="background-color: #f44336;">退出する</button>
         </div>
         <div style="background: #f0f0f0; padding: 10px; border-radius: 8px; font-size: 14px;">
@@ -41,6 +41,7 @@ let customBgImage: HTMLImageElement | null = null;
 let processedStream: MediaStream;
 let activeCalls: MediaConnection[] = [];
 let localCameraStream: MediaStream;
+// 警告が出ていた screenAudioStream は削除しました
 
 const selfieSegmentation = new SelfieSegmentation({
   locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`
@@ -50,12 +51,9 @@ selfieSegmentation.setOptions({ modelSelection: 0 });
 selfieSegmentation.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  
   if (isScreenSharing) {
-    // 画面共有中はAI処理をせず、そのまま描画
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   } else {
-    // 通常時はAI背景合成
     ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
     ctx.globalCompositeOperation = 'source-out';
     if (customBgImage) {
@@ -80,6 +78,7 @@ async function startCamera() {
     video.play();
     processedStream = canvas.captureStream(20);
     localCameraStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
+    
     const sendVideo = async () => {
       if (video.srcObject) {
         await selfieSegmentation.send({ image: video });
@@ -91,17 +90,20 @@ async function startCamera() {
 }
 startCamera();
 
-// 画面共有の切り替え
 shareBtn.addEventListener('click', async () => {
   if (!isScreenSharing) {
     try {
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       video.srcObject = screenStream;
       isScreenSharing = true;
-      shareBtn.innerText = "画面共有を停止";
+      shareBtn.innerText = "共有を停止";
       shareBtn.style.backgroundColor = "#ff9800";
 
-      // 画面共有が終了（ブラウザ側の停止ボタンなど）した時の処理
+      const audioTrack = screenStream.getAudioTracks()[0];
+      if (audioTrack) {
+        processedStream.addTrack(audioTrack);
+      }
+
       screenStream.getVideoTracks()[0].onended = () => stopScreenShare();
     } catch (err) {
       console.error("画面共有に失敗:", err);
@@ -114,8 +116,16 @@ shareBtn.addEventListener('click', async () => {
 function stopScreenShare() {
   video.srcObject = localCameraStream;
   isScreenSharing = false;
-  shareBtn.innerText = "画面共有を開始";
+  shareBtn.innerText = "画面・音声を共有";
   shareBtn.style.backgroundColor = "#2196F3";
+  
+  processedStream.getAudioTracks().forEach(track => {
+    // 画面共有の音声トラック（ラベルが空、または Screen を含むもの）を停止して削除
+    if (track.label.includes("Screen") || track.label === "") {
+        track.stop();
+        processedStream.removeTrack(track);
+    }
+  });
 }
 
 bgInput.addEventListener('change', (e) => {
@@ -152,6 +162,7 @@ peer.on('call', (call) => {
   activeCalls.push(call);
   setupVideoCall(call);
 });
+
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const remoteId = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
   if (!remoteId) return alert('IDを入力してください');
