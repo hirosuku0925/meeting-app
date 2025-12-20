@@ -2,180 +2,165 @@ import './style.css'
 import { Peer, MediaConnection } from 'peerjs'
 import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 
-let myName = "";
-
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <div style="max-width: 1000px; margin: 0 auto; background: #1a1a1a; color: white; min-height: 100vh; padding: 10px; font-family: sans-serif;">
-    <h1 style="font-size: 1.2rem; text-align: center; margin-bottom: 10px;">AI会議室 (安定・くっきり版)</h1>
-    
-    <div id="video-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-bottom: 15px;">
-      <div class="video-container" style="position: relative; aspect-ratio: 4/3; background: #000; border-radius: 12px; overflow: hidden; border: 1px solid #444;">
-        <canvas id="local-canvas" width="480" height="360" style="width: 100%; height: 100%; object-fit: cover;"></canvas>
-        <div id="my-name-label" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); padding: 2px 8px; border-radius: 4px; font-size: 11px;">自分</div>
-      </div>
+  <div>
+    <h1>AIバーチャル背景会議室</h1>
+    <div id="video-grid" style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; padding: 20px;">
+      <canvas id="local-canvas" width="480" height="360" style="width: 300px; border: 2px solid #646cff; border-radius: 10px;"></canvas>
     </div>
-
-    <div style="background: #2a2a2a; padding: 15px; border-radius: 15px; display: flex; flex-direction: column; gap: 12px;">
-      <input id="name-input" type="text" placeholder="名前を入力" style="padding: 12px; border-radius: 8px; border: none; color: black; font-size: 14px;">
-      
-      <div style="display: flex; gap: 8px; justify-content: center;">
-        <button id="blur-btn" style="flex: 1; background: #444; color: white; border: none; padding: 12px; border-radius: 8px; font-size: 11px; font-weight: bold; cursor: pointer;">ぼかし: OFF</button>
-        <button id="share-btn" style="flex: 1; background: #007bff; color: white; border: none; padding: 12px; border-radius: 8px; font-size: 11px; font-weight: bold; cursor: pointer;">画面共有</button>
-        <button id="hangup-btn" style="flex: 1; background: #dc3545; color: white; border: none; padding: 12px; border-radius: 8px; font-size: 11px; font-weight: bold; cursor: pointer;">退出</button>
+    
+    <div class="card">
+      <div style="margin-bottom: 10px; display: flex; flex-direction: column; gap: 10px; align-items: center;">
+        <div style="display: flex; gap: 5px;">
+          <button id="mic-btn" style="background-color: #2196F3;">マイク: ON</button>
+          <button id="camera-btn" style="background-color: #2196F3;">カメラ: ON</button>
+          <button id="blur-btn" style="background-color: #4CAF50;">背景ぼかし: OFF</button>
+          <button id="hangup-btn" style="background-color: #f44336;">退出</button>
+        </div>
+        <div style="background: #f0f0f0; padding: 10px; border-radius: 8px; font-size: 14px;">
+          <label>背景画像を選択：</label>
+          <input type="file" id="bg-upload" accept="image/*">
+        </div>
       </div>
-
-      <div style="display: flex; gap: 8px; border-top: 1px solid #444; padding-top: 12px;">
-        <input id="remote-id-input" type="text" placeholder="相手のID" style="flex: 2; padding: 10px; border-radius: 8px; border: none; color: black;">
-        <button id="connect-btn" style="flex: 1; background: #28a745; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer;">接続</button>
-      </div>
-      <p id="status" style="font-size: 10px; text-align: center; color: #888; margin: 0;">ID取得中...</p>
+      <input id="remote-id-input" type="text" placeholder="相手のIDを入力">
+      <button id="connect-btn">接続</button>
+      <p id="status">あなたのID: 取得中...</p>
     </div>
     <video id="hidden-video" style="display:none" autoplay playsinline muted></video>
   </div>
 `
 
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
-const ctx = canvas.getContext('2d', { alpha: false })!;
+const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const statusDisplay = document.querySelector<HTMLParagraphElement>('#status')!;
-const shareBtn = document.querySelector<HTMLButtonElement>('#share-btn')!;
-const nameInput = document.querySelector<HTMLInputElement>('#name-input')!;
+const bgInput = document.querySelector<HTMLInputElement>('#bg-upload')!;
 
 let isBlurred = false;
-let isScreenSharing = false;
-let processedStream: MediaStream;
-let localCameraStream: MediaStream;
+let customBgImage: HTMLImageElement | null = null;
+let localStream: MediaStream; // 元のカメラ・マイクデータ
+let processedStream: MediaStream; // AI加工後のデータ
+let activeCalls: MediaConnection[] = [];
 
+// AIの設定
 const selfieSegmentation = new SelfieSegmentation({
   locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`
 });
-
-// 軽量モデル(0)を使用し、鏡合わせ(selfieMode)を無効にします
-selfieSegmentation.setOptions({ modelSelection: 0, selfieMode: false });
+selfieSegmentation.setOptions({ modelSelection: 0 });
 
 selfieSegmentation.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  if (!isBlurred || isScreenSharing) {
-    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-  } else {
-    // 【修正ポイント】自分を消さないための新しい描き方
-    
-    // 1. まず背景として、全体をぼかして描く
-    ctx.filter = 'blur(10px)';
+  ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
+  ctx.globalCompositeOperation = 'source-out';
+  
+  if (customBgImage) {
+    ctx.drawImage(customBgImage, 0, 0, canvas.width, canvas.height);
+  } else if (isBlurred) {
+    ctx.filter = 'blur(8px)';
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
     ctx.filter = 'none';
-
-    // 2. 「自分だけの形」を取り出す設定にする
-    ctx.globalCompositeOperation = 'destination-in';
-    ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
-
-    // 3. その上に、ぼけていない自分自身を重ねる
-    ctx.globalCompositeOperation = 'destination-over';
+  } else {
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   }
+
+  ctx.globalCompositeOperation = 'destination-over';
+  ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   ctx.restore();
 });
 
+// カメラ開始
 async function startCamera() {
-  try {
-    localCameraStream = await navigator.mediaDevices.getUserMedia({ 
-      video: { width: 480, height: 360, frameRate: 15 }, 
-      audio: true 
-    });
-    video.srcObject = localCameraStream;
-    video.onloadedmetadata = () => {
-      video.play();
-      processedStream = canvas.captureStream(15);
-      localCameraStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
-      
-      const process = async () => {
-        if (!video.paused && !video.ended) {
-          if (isBlurred && !isScreenSharing) {
-            await selfieSegmentation.send({ image: video });
-          } else {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          }
-        }
-        // CPUを少し休ませて「かくつき」を防ぐ
-        setTimeout(() => requestAnimationFrame(process), 30); 
-      };
-      process();
+  localStream = await navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true });
+  video.srcObject = localStream;
+  video.onloadedmetadata = () => {
+    video.play();
+    processedStream = canvas.captureStream(20);
+    localStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
+    
+    const sendVideo = async () => {
+      if (video.srcObject) {
+        await selfieSegmentation.send({ image: video });
+        requestAnimationFrame(sendVideo);
+      }
     };
-  } catch (e) { console.error(e); }
+    sendVideo();
+  };
 }
 startCamera();
 
-// --- ボタン・通信処理 ---
-nameInput.addEventListener('input', () => {
-  myName = nameInput.value;
-  document.querySelector('#my-name-label')!.textContent = myName || "自分";
+// マイクON/OFF
+document.querySelector('#mic-btn')?.addEventListener('click', () => {
+  const audioTrack = localStream.getAudioTracks()[0];
+  audioTrack.enabled = !audioTrack.enabled;
+  const btn = document.querySelector<HTMLButtonElement>('#mic-btn')!;
+  btn.innerText = audioTrack.enabled ? "マイク: ON" : "マイク: OFF";
+  btn.style.backgroundColor = audioTrack.enabled ? "#2196F3" : "#f44336";
 });
 
-shareBtn.addEventListener('click', async () => {
-  if (!isScreenSharing) {
-    try {
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 } });
-      video.srcObject = screenStream;
-      isScreenSharing = true;
-      shareBtn.innerText = "停止";
-      screenStream.getVideoTracks()[0].onended = () => stopScreenShare();
-    } catch (err) { console.error(err); }
-  } else { stopScreenShare(); }
+// カメラON/OFF
+document.querySelector('#camera-btn')?.addEventListener('click', () => {
+  const videoTrack = localStream.getVideoTracks()[0];
+  videoTrack.enabled = !videoTrack.enabled;
+  const btn = document.querySelector<HTMLButtonElement>('#camera-btn')!;
+  btn.innerText = videoTrack.enabled ? "カメラ: ON" : "カメラ: OFF";
+  btn.style.backgroundColor = videoTrack.enabled ? "#2196F3" : "#f44336";
 });
 
-function stopScreenShare() {
-  video.srcObject = localCameraStream;
-  isScreenSharing = false;
-  shareBtn.innerText = "画面共有";
-}
+// 背景画像アップロード
+bgInput.addEventListener('change', (e) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    const img = new Image();
+    img.onload = () => { customBgImage = img; isBlurred = false; };
+    img.src = event.target?.result as string;
+  };
+  reader.readAsDataURL(file);
+});
 
+// 退出・背景・接続の処理（前回の機能を維持）
 document.querySelector('#hangup-btn')?.addEventListener('click', () => {
+  activeCalls.forEach(call => call.close());
+  localStream?.getTracks().forEach(track => track.stop());
   window.location.reload();
 });
 
 document.querySelector('#blur-btn')?.addEventListener('click', () => {
+  customBgImage = null;
   isBlurred = !isBlurred;
   const btn = document.querySelector<HTMLButtonElement>('#blur-btn')!;
-  btn.innerText = isBlurred ? "ぼかし: ON" : "ぼかし: OFF";
-  btn.style.background = isBlurred ? '#dc3545' : '#444';
+  btn.innerText = isBlurred ? "背景ぼかし: ON" : "背景ぼかし: OFF";
+  btn.style.backgroundColor = isBlurred ? '#f44336' : '#4CAF50';
 });
 
 const peer = new Peer();
 peer.on('open', id => { statusDisplay.innerText = `あなたのID: ${id}`; });
 peer.on('call', (call) => {
   call.answer(processedStream);
-  setupVideoCall(call, call.metadata?.name || "ゲスト");
+  activeCalls.push(call);
+  setupVideoCall(call);
 });
 
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const remoteId = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
-  if (!remoteId) return;
-  const call = peer.call(remoteId, processedStream, { metadata: { name: myName || "ゲスト" } });
-  setupVideoCall(call, "相手"); 
+  if (!remoteId) return alert('IDを入力してください');
+  const call = peer.call(remoteId, processedStream);
+  activeCalls.push(call);
+  setupVideoCall(call);
 });
 
-function setupVideoCall(call: MediaConnection, name: string) {
+function setupVideoCall(call: MediaConnection) {
   const videoGrid = document.querySelector('#video-grid')!;
-  const container = document.createElement('div');
-  container.style.cssText = "position: relative; aspect-ratio: 4/3; background: #000; border-radius: 12px; overflow: hidden;";
-
   const remoteVideo = document.createElement('video');
-  remoteVideo.style.cssText = "width: 100%; height: 100%; object-fit: cover;";
+  remoteVideo.style.width = "300px";
+  remoteVideo.style.borderRadius = "10px";
   remoteVideo.autoplay = true;
   remoteVideo.playsInline = true;
-
-  const nameLabel = document.createElement('div');
-  nameLabel.innerText = name;
-  nameLabel.style.cssText = "position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px;";
-
-  container.appendChild(remoteVideo);
-  container.appendChild(nameLabel);
-
   call.on('stream', (stream) => {
     remoteVideo.srcObject = stream;
-    videoGrid.appendChild(container);
+    videoGrid.appendChild(remoteVideo);
   });
-  call.on('close', () => container.remove());
+  call.on('close', () => remoteVideo.remove());
 }
