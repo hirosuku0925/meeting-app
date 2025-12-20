@@ -4,9 +4,9 @@ import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div>
-    <h1>AIバーチャル背景 & 画面共有 会議室</h1>
+    <h1>AIバーチャル背景 & アバター会議室</h1>
     <div id="video-grid" style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; padding: 20px;">
-      <canvas id="local-canvas" width="480" height="360" style="width: 300px; border: 2px solid #646cff; border-radius: 10px;"></canvas>
+      <canvas id="local-canvas" width="480" height="360" style="width: 300px; border: 2px solid #646cff; border-radius: 10px; background: #333;"></canvas>
     </div>
     
     <div class="card">
@@ -18,9 +18,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <button id="blur-btn" style="background-color: #4CAF50;">背景ぼかし: OFF</button>
           <button id="hangup-btn" style="background-color: #f44336;">退出</button>
         </div>
-        <div style="background: #f0f0f0; padding: 10px; border-radius: 8px; font-size: 14px;">
-          <label>背景画像を選択：</label>
-          <input type="file" id="bg-upload" accept="image/*">
+        <div style="background: #f0f0f0; padding: 10px; border-radius: 8px; font-size: 14px; display: flex; flex-direction: column; gap: 5px;">
+          <label>📁 背景画像：<input type="file" id="bg-upload" accept="image/*"></label>
+          <label>👤 アバター画像：<input type="file" id="avatar-upload" accept="image/*"></label>
         </div>
       </div>
       <input id="remote-id-input" type="text" placeholder="相手のIDを入力">
@@ -36,9 +36,12 @@ const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const statusDisplay = document.querySelector<HTMLParagraphElement>('#status')!;
 const bgInput = document.querySelector<HTMLInputElement>('#bg-upload')!;
+const avatarInput = document.querySelector<HTMLInputElement>('#avatar-upload')!;
 
 let isBlurred = false;
+let isCameraOn = true;
 let customBgImage: HTMLImageElement | null = null;
+let avatarImage: HTMLImageElement | null = null;
 let localStream: MediaStream;
 let processedStream: MediaStream;
 let screenStream: MediaStream | null = null;
@@ -53,9 +56,30 @@ selfieSegmentation.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   
-  // 画面共有中はAI背景処理をスキップして画面を描画
   if (screenStream) {
     ctx.drawImage(screenStream.getVideoTracks()[0] as any, 0, 0, canvas.width, canvas.height);
+  } else if (!isCameraOn) {
+    // 【oVCe風アバター機能】カメラがOFFのときの描画
+    ctx.fillStyle = "#444";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (avatarImage) {
+      // アバター画像があれば中央に丸く表示
+      const size = 150;
+      const x = (canvas.width - size) / 2;
+      const y = (canvas.height - size) / 2;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(canvas.width / 2, canvas.height / 2, size / 2, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.drawImage(avatarImage, x, y, size, size);
+      ctx.restore();
+    } else {
+      // 画像がない場合は「カメラOFF」の文字を表示
+      ctx.fillStyle = "white";
+      ctx.font = "20px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Camera OFF", canvas.width / 2, canvas.height / 2);
+    }
   } else {
     // 通常のAI背景処理
     ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
@@ -75,6 +99,7 @@ selfieSegmentation.onResults((results) => {
   ctx.restore();
 });
 
+// カメラ開始
 async function startCamera() {
   localStream = await navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true });
   video.srcObject = localStream;
@@ -82,7 +107,6 @@ async function startCamera() {
     video.play();
     processedStream = canvas.captureStream(20);
     localStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
-    
     const sendVideo = async () => {
       if (video.srcObject) {
         await selfieSegmentation.send({ image: video });
@@ -94,7 +118,39 @@ async function startCamera() {
 }
 startCamera();
 
-// 画面共有ボタンの処理
+// カメラON/OFFボタン（修正）
+document.querySelector('#camera-btn')?.addEventListener('click', () => {
+  isCameraOn = !isCameraOn;
+  const btn = document.querySelector<HTMLButtonElement>('#camera-btn')!;
+  btn.innerText = isCameraOn ? "カメラ: ON" : "カメラ: OFF";
+  btn.style.backgroundColor = isCameraOn ? "#2196F3" : "#f44336";
+});
+
+// アバター画像アップロード処理
+avatarInput.addEventListener('change', (e) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    const img = new Image();
+    img.onload = () => { avatarImage = img; };
+    img.src = event.target?.result as string;
+  };
+  reader.readAsDataURL(file);
+});
+
+// --- 他のボタンやPeerJS処理は前回と同じ ---
+// (mic-btn, share-btn, blur-btn, hangup-btn, bg-upload, peer.on('call'), etc.)
+// ※文字数制限のため共通部分は省略していますが、前回のコードを維持してください。
+
+document.querySelector('#mic-btn')?.addEventListener('click', () => {
+  const audioTrack = localStream.getAudioTracks()[0];
+  audioTrack.enabled = !audioTrack.enabled;
+  const btn = document.querySelector<HTMLButtonElement>('#mic-btn')!;
+  btn.innerText = audioTrack.enabled ? "マイク: ON" : "マイク: OFF";
+  btn.style.backgroundColor = audioTrack.enabled ? "#2196F3" : "#f44336";
+});
+
 document.querySelector('#share-btn')?.addEventListener('click', async () => {
   const btn = document.querySelector<HTMLButtonElement>('#share-btn')!;
   if (!screenStream) {
@@ -102,17 +158,9 @@ document.querySelector('#share-btn')?.addEventListener('click', async () => {
       screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
       btn.innerText = "画面共有: ON";
       btn.style.backgroundColor = "#E91E63";
-      
-      // 共有停止を検知したとき
-      screenStream.getVideoTracks()[0].onended = () => {
-        stopScreenShare();
-      };
-    } catch (err) {
-      console.error(err);
-    }
-  } else {
-    stopScreenShare();
-  }
+      screenStream.getVideoTracks()[0].onended = () => stopScreenShare();
+    } catch (err) { console.error(err); }
+  } else { stopScreenShare(); }
 });
 
 function stopScreenShare() {
@@ -122,23 +170,6 @@ function stopScreenShare() {
   btn.innerText = "画面共有: OFF";
   btn.style.backgroundColor = "#9C27B0";
 }
-
-// 他のボタン（マイク、カメラ、背景など）は前回のまま
-document.querySelector('#mic-btn')?.addEventListener('click', () => {
-  const audioTrack = localStream.getAudioTracks()[0];
-  audioTrack.enabled = !audioTrack.enabled;
-  const btn = document.querySelector<HTMLButtonElement>('#mic-btn')!;
-  btn.innerText = audioTrack.enabled ? "マイク: ON" : "マイク: OFF";
-  btn.style.backgroundColor = audioTrack.enabled ? "#2196F3" : "#f44336";
-});
-
-document.querySelector('#camera-btn')?.addEventListener('click', () => {
-  const videoTrack = localStream.getVideoTracks()[0];
-  videoTrack.enabled = !videoTrack.enabled;
-  const btn = document.querySelector<HTMLButtonElement>('#camera-btn')!;
-  btn.innerText = videoTrack.enabled ? "カメラ: ON" : "カメラ: OFF";
-  btn.style.backgroundColor = videoTrack.enabled ? "#2196F3" : "#f44336";
-});
 
 bgInput.addEventListener('change', (e) => {
   const file = (e.target as HTMLInputElement).files?.[0];
