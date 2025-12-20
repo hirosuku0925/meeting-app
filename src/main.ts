@@ -11,7 +11,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </div>
     
     <div class="card" style="max-width: 500px; margin: 20px auto; padding: 25px; border-radius: 16px; background: #fff; box-shadow: 0 10px 25px rgba(0,0,0,0.1);">
-      
       <div style="display: flex; gap: 8px; justify-content: center; margin-bottom: 20px; flex-wrap: wrap;">
         <button id="camera-btn" style="background-color: #2196F3; flex: 1; min-width: 100px; font-weight: bold; color: white;">📹 カメラ: ON</button>
         <button id="mic-btn" style="background-color: #4CAF50; flex: 1; min-width: 100px; font-weight: bold; color: white;">🎤 マイク: ON</button>
@@ -21,13 +20,11 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       
       <div style="background: #f8f9fa; border: 1px solid #e0e0e0; padding: 20px; border-radius: 12px; text-align: left;">
         <h3 style="margin: 0 0 15px 0; font-size: 16px; color: #444; border-left: 4px solid #00e5ff; padding-left: 10px;">あばたーせってい</h3>
-        
         <div style="margin-bottom: 15px;">
           <label style="display: block; font-weight: bold; margin-bottom: 6px; font-size: 13px; color: #666;">なまえ</label>
           <input type="text" id="user-name-input" placeholder="名前を入力" value="User Name" 
             style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #ccc; box-sizing: border-box; font-size: 14px;">
         </div>
-
         <div style="display: flex; gap: 15px;">
           <div style="flex: 1;">
             <label style="display: block; font-weight: bold; margin-bottom: 6px; font-size: 13px; color: #666;">いつものかお</label>
@@ -58,7 +55,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// --- 変数管理 ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
@@ -71,7 +67,6 @@ let imgClose: HTMLImageElement | null = null;
 let imgOpen: HTMLImageElement | null = null;
 let localStream: MediaStream;
 
-// --- FaceMesh設定 ---
 const faceMesh = new FaceMesh({
   locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
 });
@@ -87,10 +82,16 @@ faceMesh.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  if (isCameraOn && results.image) {
+  // --- 実写映り込み防止ロジック ---
+  if (isAvatarMode) {
+    // アバターモード時は常に背景を暗いグレーで塗りつぶす（実写を描画しない）
+    ctx.fillStyle = "#333";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  } else if (isCameraOn && results.image) {
+    // アバターOFFの時だけカメラ映像を描画
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   } else {
-    ctx.fillStyle = "#222";
+    ctx.fillStyle = "#111";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 
@@ -133,25 +134,30 @@ faceMesh.onResults((results) => {
       ctx.textAlign = "center";
       ctx.fillText(userName, centerX, centerY + radius + 27);
     }
+  } else if (isAvatarMode) {
+    // 顔が認識できない（横を向きすぎた）時のガイド表示
+    ctx.fillStyle = "white";
+    ctx.textAlign = "center";
+    ctx.font = "16px sans-serif";
+    ctx.fillText("前を向くとあばたーが表示されます", canvas.width / 2, canvas.height / 2);
   }
   ctx.restore();
 });
 
-// カメラ・マイク取得
 navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true }).then(stream => {
   localStream = stream;
   video.srcObject = stream;
   video.onloadedmetadata = () => {
     video.play();
     const predict = async () => {
-      if (isCameraOn) await faceMesh.send({ image: video });
+      // カメラが物理的にOFFでも、アバターのためにAI解析は継続（解析結果だけ使い、映像は捨てている状態）
+      await faceMesh.send({ image: video });
       requestAnimationFrame(predict);
     };
     predict();
   };
 });
 
-// アップロード処理
 const setupUpload = (inputId: string, prevId: string, labelId: string, cb: (img: HTMLImageElement) => void) => {
   const input = document.querySelector<HTMLInputElement>(`#${inputId}`)!;
   const prev = document.querySelector<HTMLImageElement>(`#${prevId}`)!;
@@ -169,10 +175,9 @@ const setupUpload = (inputId: string, prevId: string, labelId: string, cb: (img:
 setupUpload('avatar-close', 'prev-close', 'label-close', (img) => imgClose = img);
 setupUpload('avatar-open', 'prev-open', 'label-open', (img) => imgOpen = img);
 
-// --- ボタンイベント ---
 document.querySelector('#camera-btn')?.addEventListener('click', () => {
   isCameraOn = !isCameraOn;
-  if (localStream) localStream.getVideoTracks()[0].enabled = isCameraOn;
+  // トラック自体を止めるのではなく、フラグ管理にすることでアバターの解析を安定させる
   const btn = document.querySelector<HTMLButtonElement>('#camera-btn')!;
   btn.innerText = isCameraOn ? "📹 カメラ: ON" : "📹 カメラ: OFF";
   btn.style.backgroundColor = isCameraOn ? "#2196F3" : "#f44336";
@@ -195,7 +200,6 @@ document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
 
 document.querySelector('#hangup-btn')?.addEventListener('click', () => window.location.reload());
 
-// --- PeerJS通信処理 ---
 const peer = new Peer();
 peer.on('open', (id) => {
   const statusEl = document.querySelector<HTMLElement>('#status');
@@ -205,7 +209,7 @@ peer.on('open', (id) => {
 function setupRemoteVideo(call: any) {
   call.on('stream', (stream: MediaStream) => {
     const videoGrid = document.querySelector('#video-grid')!;
-    if (document.getElementById(`video-${call.peer}`)) return; // 重複防止
+    if (document.getElementById(`video-${call.peer}`)) return;
 
     const remoteVideo = document.createElement('video');
     remoteVideo.id = `video-${call.peer}`;
@@ -221,7 +225,7 @@ function setupRemoteVideo(call: any) {
 }
 
 peer.on('call', (call) => {
-  if (call.peer === peer.id) return; // 自分自身は無視
+  if (call.peer === peer.id) return;
   const processedStream = canvas.captureStream(25);
   localStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
   call.answer(processedStream);
