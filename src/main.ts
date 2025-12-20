@@ -90,6 +90,7 @@ const setupImageUpload = (id: string, callback: (img: HTMLImageElement) => void)
     }
   });
 };
+
 setupImageUpload('avatar-close', (img) => imgClose = img);
 setupImageUpload('avatar-open', (img) => imgOpen = img);
 setupImageUpload('avatar-blink', (img) => imgBlink = img);
@@ -102,29 +103,44 @@ faceMesh.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // 反転処理
+  // --- 1. 左右反転を適用 ---
   ctx.translate(canvas.width, 0);
   ctx.scale(-1, 1);
 
-  if (backgroundImg) ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
-  if (results.image) {
-    if (isAvatarMode) ctx.globalAlpha = 0.3;
-    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-    ctx.globalAlpha = 1.0;
+  // --- 2. 背景の描画 (一番下に配置) ---
+  if (backgroundImg) {
+    ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
   }
 
+  // --- 3. カメラ映像の描画 ---
+  if (results.image) {
+    ctx.save();
+    // 背景画像がある、もしくはアバターモードの場合はカメラ映像を透かす
+    if (isAvatarMode) {
+      ctx.globalAlpha = 0.2; // アバター時はカメラをほぼ透明に
+    } else if (backgroundImg) {
+      ctx.globalAlpha = 0.5; // 背景合成時はカメラを半透明に
+    }
+    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
+  }
+
+  // --- 4. 顔認識に関連するパーツの描画 ---
   if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
     const landmarks = results.multiFaceLandmarks[0];
     const centerX = landmarks[1].x * canvas.width;
     const centerY = landmarks[1].y * canvas.height;
     const radius = ((landmarks[454].x - landmarks[234].x) * canvas.width * 1.8) / 2;
 
+    // アバター表示
     if (isAvatarMode && imgClose && imgOpen) {
       const isMouthOpen = Math.abs(landmarks[13].y - landmarks[14].y) > 0.025;
       const isBlinking = Math.abs(landmarks[159].y - landmarks[145].y) < 0.012;
 
       ctx.save();
-      ctx.beginPath(); ctx.arc(centerX, centerY, radius, 0, Math.PI * 2); ctx.clip();
+      ctx.beginPath(); 
+      ctx.arc(centerX, centerY, radius, 0, Math.PI * 2); 
+      ctx.clip();
       
       let targetImg = imgClose;
       if (isBlinking && imgBlink) targetImg = imgBlink;
@@ -134,13 +150,14 @@ faceMesh.onResults((results) => {
       ctx.restore();
     }
 
-    // リアクション描画
+    // リアクション（反転を考慮して描画）
     const now = Date.now();
     reactions = reactions.filter(r => now - r.time < 2000);
     reactions.forEach((r, i) => {
       ctx.save();
-      ctx.scale(-1, 1);
+      ctx.scale(-1, 1); // テキストが反転しないように再反転
       ctx.font = "40px serif";
+      ctx.textAlign = "center";
       ctx.fillText(r.emoji, -centerX, centerY - radius - 20 - (i * 40));
       ctx.restore();
     });
@@ -148,7 +165,7 @@ faceMesh.onResults((results) => {
   ctx.restore();
 });
 
-// カメラ開始
+// カメラ開始処理
 navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true }).then(stream => {
   localStream = stream;
   video.srcObject = stream;
@@ -159,7 +176,7 @@ navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio:
   };
 });
 
-// PeerJS / チャット / リアクション処理
+// --- 以下、通信とボタン操作 (省略なし) ---
 const peer = new Peer();
 peer.on('open', (id) => document.querySelector<HTMLElement>('#status')!.innerText = `あなたのID: ${id}`);
 
@@ -187,6 +204,7 @@ peer.on('call', (call) => {
 
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const id = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
+  if(!id) return;
   const conn = peer.connect(id);
   connections.push(conn);
   handleData(conn);
@@ -198,7 +216,7 @@ document.querySelector('#connect-btn')?.addEventListener('click', () => {
 function setupRemoteVideo(call: any) {
   call.on('stream', (s: MediaStream) => {
     const v = document.createElement('video');
-    v.style.width = "320px"; v.autoplay = true; v.srcObject = s;
+    v.style.width = "320px"; v.style.borderRadius = "15px"; v.autoplay = true; v.srcObject = s;
     document.querySelector('#video-grid')!.appendChild(v);
   });
 }
@@ -223,16 +241,24 @@ document.querySelectorAll('.react-btn').forEach(b => {
 document.querySelector('#camera-btn')?.addEventListener('click', () => {
   isCameraOn = !isCameraOn;
   localStream.getVideoTracks()[0].enabled = isCameraOn;
+  const btn = document.querySelector<HTMLButtonElement>('#camera-btn')!;
+  btn.innerText = isCameraOn ? "📹 カメラ: ON" : "📹 カメラ: OFF";
+  btn.style.backgroundColor = isCameraOn ? "#2196F3" : "#f44336";
 });
 
 document.querySelector('#mic-btn')?.addEventListener('click', () => {
   isMicOn = !isMicOn;
   localStream.getAudioTracks()[0].enabled = isMicOn;
+  const btn = document.querySelector<HTMLButtonElement>('#mic-btn')!;
+  btn.innerText = isMicOn ? "🎤 マイク: ON" : "🎤 マイク: OFF";
+  btn.style.backgroundColor = isMicOn ? "#4CAF50" : "#f44336";
 });
 
 document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
   isAvatarMode = !isAvatarMode;
-  document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!.innerText = isAvatarMode ? "👤 アバター: ON" : "👤 アバター: OFF";
+  const btn = document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!;
+  btn.innerText = isAvatarMode ? "👤 アバター: ON" : "👤 アバター: OFF";
+  btn.style.backgroundColor = isAvatarMode ? "#FFC107" : "#555";
 });
 
 document.querySelector('#hangup-btn')?.addEventListener('click', () => window.location.reload());
