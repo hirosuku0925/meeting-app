@@ -1,5 +1,5 @@
 import './style.css'
-import { Peer } from 'peerjs'
+import { Peer, MediaConnection } from 'peerjs'
 import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
@@ -9,7 +9,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <canvas id="local-canvas" width="480" height="360" style="width: 300px; border: 2px solid #646cff; border-radius: 10px;"></canvas>
     </div>
     <div class="card">
-      <button id="blur-btn" style="background-color: #4CAF50;">AIぼかし: OFF</button>
+      <div style="margin-bottom: 10px; display: flex; gap: 5px; justify-content: center;">
+        <button id="blur-btn" style="background-color: #4CAF50;">AIぼかし: OFF</button>
+        <button id="hangup-btn" style="background-color: #f44336;">退出する</button>
+      </div>
       <input id="remote-id-input" type="text" placeholder="相手のIDを入力">
       <button id="connect-btn">接続</button>
       <p id="status">あなたのID: 取得中...</p>
@@ -24,69 +27,61 @@ const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const statusDisplay = document.querySelector<HTMLParagraphElement>('#status')!;
 let isBlurred = false;
 let processedStream: MediaStream;
+let activeCalls: MediaConnection[] = []; // 通信中のリストを保存
 
 const selfieSegmentation = new SelfieSegmentation({
   locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`
 });
 
-selfieSegmentation.setOptions({ modelSelection: 0 }); // 高速モード
+selfieSegmentation.setOptions({ modelSelection: 0 });
 
 selfieSegmentation.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  
-  // 人間の形を判定
   ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
-  
-  // 背景の描画
   ctx.globalCompositeOperation = 'source-out';
-  if (isBlurred) {
-    ctx.filter = 'blur(8px)';
-  }
+  if (isBlurred) { ctx.filter = 'blur(8px)'; }
   ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   ctx.filter = 'none';
-
-  // 人間の描画
   ctx.globalCompositeOperation = 'destination-over';
   ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   ctx.restore();
 });
 
-// カメラを確実に起動してからAIを開始する
 async function startCamera() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ 
-      video: { width: 480, height: 360 }, 
-      audio: true 
-    });
-    
-    video.srcObject = stream;
-    
-    // ビデオが再生可能になるのを待つ
-    video.onloadedmetadata = () => {
-      video.play();
-      
-      processedStream = canvas.captureStream(20);
-      stream.getAudioTracks().forEach(track => processedStream.addTrack(track));
-
-      const sendVideo = async () => {
-        // ビデオがしっかり動いている時だけAIに送る
-        if (video.currentTime !== 0) {
-          await selfieSegmentation.send({ image: video });
-        }
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true });
+  video.srcObject = stream;
+  video.onloadedmetadata = () => {
+    video.play();
+    processedStream = canvas.captureStream(20);
+    stream.getAudioTracks().forEach(track => processedStream.addTrack(track));
+    const sendVideo = async () => {
+      if (video.srcObject) { // カメラが動いている時だけ
+        await selfieSegmentation.send({ image: video });
         requestAnimationFrame(sendVideo);
-      };
-      sendVideo();
+      }
     };
-  } catch (err) {
-    console.error("カメラの起動に失敗しました:", err);
-    alert("カメラが見つかりません。許可を確認してください。");
-  }
+    sendVideo();
+  };
 }
 
 startCamera();
 
-// --- 接続ボタンなどの処理 ---
+// 退出ボタンの処理
+document.querySelector('#hangup-btn')?.addEventListener('click', () => {
+  // すべての通信を切る
+  activeCalls.forEach(call => call.close());
+  activeCalls = [];
+  
+  // 自分のカメラを止める
+  const stream = video.srcObject as MediaStream;
+  stream?.getTracks().forEach(track => track.stop());
+  video.srcObject = null;
+  
+  // 画面をリロード（一番確実に初期状態に戻ります）
+  window.location.reload();
+});
+
 document.querySelector('#blur-btn')?.addEventListener('click', () => {
   isBlurred = !isBlurred;
   const btn = document.querySelector<HTMLButtonElement>('#blur-btn')!;
@@ -96,18 +91,22 @@ document.querySelector('#blur-btn')?.addEventListener('click', () => {
 
 const peer = new Peer();
 peer.on('open', id => { statusDisplay.innerText = `あなたのID: ${id}`; });
+
 peer.on('call', (call) => {
   call.answer(processedStream);
+  activeCalls.push(call);
   setupVideoCall(call);
 });
+
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const remoteId = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
   if (!remoteId) return alert('IDを入力してください');
   const call = peer.call(remoteId, processedStream);
+  activeCalls.push(call);
   setupVideoCall(call);
 });
 
-function setupVideoCall(call: any) {
+function setupVideoCall(call: MediaConnection) {
   const videoGrid = document.querySelector('#video-grid')!;
   const remoteVideo = document.createElement('video');
   remoteVideo.style.width = "300px";
