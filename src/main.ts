@@ -28,7 +28,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         </div>
         
         <div style="background: #f8f9fa; padding: 15px; border-radius: 12px; text-align: left; margin-bottom: 15px;">
-          <label style="font-size: 12px; font-weight: bold; color: #666;">アバター画像を設定</label>
+          <label style="font-size: 12px; font-weight: bold; color: #666;">アバター画像を設定（2枚選んでね）</label>
           <div style="display: flex; gap: 10px; margin-top: 5px;">
             <div style="flex: 1; text-align: center; border: 1px dashed #ccc; padding: 5px; border-radius: 8px;">
               <span style="font-size: 10px; display: block;">ふだんの顔</span>
@@ -64,7 +64,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// --- 変数管理 ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
@@ -81,13 +80,16 @@ let localStream: MediaStream;
 let connections: DataConnection[] = []; 
 let reactions: { emoji: string, x: number, y: number, time: number }[] = [];
 
-// --- 画像アップロード処理 ---
+// --- 画像アップロード ---
 const setupImageUpload = (id: string, callback: (img: HTMLImageElement) => void) => {
   document.querySelector<HTMLInputElement>(`#${id}`)?.addEventListener('change', (e) => {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (file) {
       const img = new Image();
-      img.onload = () => callback(img);
+      img.onload = () => {
+        console.log(id + " loaded");
+        callback(img);
+      };
       img.src = URL.createObjectURL(file);
     }
   });
@@ -95,7 +97,6 @@ const setupImageUpload = (id: string, callback: (img: HTMLImageElement) => void)
 setupImageUpload('avatar-close', (img) => imgClose = img);
 setupImageUpload('avatar-open', (img) => imgOpen = img);
 
-// --- FaceMesh 描画 ---
 const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
 faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
 
@@ -103,7 +104,8 @@ faceMesh.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  if (isAvatarMode) {
+  // 背景描画
+  if (isAvatarMode && imgClose && imgOpen) {
     ctx.fillStyle = "#333";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   } else if (isCameraOn && results.image) {
@@ -119,7 +121,8 @@ faceMesh.onResults((results) => {
     const centerY = landmarks[1].y * canvas.height;
     const radius = ((landmarks[454].x - landmarks[234].x) * canvas.width * 1.8) / 2;
 
-    if (isAvatarMode && imgClose) {
+    // アバター描画（画像があるときだけ）
+    if (isAvatarMode && imgClose && imgOpen) {
       const leftEye = landmarks[33], rightEye = landmarks[263];
       const angle = Math.atan2((rightEye.y - leftEye.y) * canvas.height, (rightEye.x - leftEye.x) * canvas.width);
       const isMouthOpen = Math.sqrt(Math.pow(landmarks[13].x - landmarks[14].x, 2) + Math.pow(landmarks[13].y - landmarks[14].y, 2)) > 0.025;
@@ -132,7 +135,7 @@ faceMesh.onResults((results) => {
       ctx.save();
       ctx.beginPath(); ctx.arc(centerX, centerY, radius, 0, Math.PI * 2); ctx.clip();
       ctx.translate(centerX, centerY); ctx.rotate(angle);
-      ctx.drawImage((isMouthOpen && imgOpen) ? imgOpen : imgClose, -radius, -radius, radius * 2, radius * 2);
+      ctx.drawImage((isMouthOpen && isMicOn) ? imgOpen : imgClose, -radius, -radius, radius * 2, radius * 2);
       ctx.restore();
 
       const userName = nameInput.value || "User";
@@ -143,6 +146,7 @@ faceMesh.onResults((results) => {
       ctx.fillStyle = "white"; ctx.textAlign = "center"; ctx.fillText(userName, centerX, centerY + radius + 27);
     }
 
+    // リアクション
     const now = Date.now();
     reactions = reactions.filter(r => now - r.time < 2000);
     reactions.forEach(r => {
@@ -157,12 +161,15 @@ faceMesh.onResults((results) => {
   ctx.restore();
 });
 
-// --- 通信・デバイス設定 ---
 navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true }).then(stream => {
   localStream = stream;
   video.srcObject = stream;
-  video.muted = true; // 自分の音を聞こえないようにする
-  video.onloadedmetadata = () => { video.play(); const predict = async () => { await faceMesh.send({ image: video }); requestAnimationFrame(predict); }; predict(); };
+  video.muted = true;
+  video.onloadedmetadata = () => { 
+    video.play(); 
+    const predict = async () => { await faceMesh.send({ image: video }); requestAnimationFrame(predict); }; 
+    predict(); 
+  };
 });
 
 function sendData(type: string, content: string) {
@@ -177,7 +184,7 @@ function addChatLog(text: string) {
   chatBox.appendChild(el); chatBox.scrollTop = chatBox.scrollHeight;
 }
 
-// --- ボタン連動イベント ---
+// ボタン設定
 document.querySelector('#camera-btn')?.addEventListener('click', () => {
   isCameraOn = !isCameraOn;
   if (localStream) localStream.getVideoTracks()[0].enabled = isCameraOn;
@@ -195,7 +202,9 @@ document.querySelector('#mic-btn')?.addEventListener('click', () => {
 });
 
 document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
-  if (!imgClose || !imgOpen) return alert("アバター画像を2枚とも選んでください！");
+  if (!imgClose || !imgOpen) {
+    alert("まずは画像を2枚選んでください！選ぶまではカメラ映像が表示されます。");
+  }
   isAvatarMode = !isAvatarMode;
   const btn = document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!;
   btn.innerText = isAvatarMode ? "👤 アバター: ON" : "👤 アバター: OFF";
@@ -216,7 +225,6 @@ document.querySelectorAll('.react-btn').forEach(btn => {
 
 document.querySelector('#hangup-btn')?.addEventListener('click', () => window.location.reload());
 
-// --- PeerJS ---
 const peer = new Peer();
 peer.on('open', (id) => document.querySelector<HTMLElement>('#status')!.innerText = `あなたのID: ${id}`);
 
@@ -233,7 +241,6 @@ peer.on('connection', (conn) => {
 });
 
 peer.on('call', (call) => {
-  if (call.peer === peer.id) return;
   const processedStream = canvas.captureStream(25);
   localStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
   call.answer(processedStream);
@@ -242,7 +249,7 @@ peer.on('call', (call) => {
 
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const remoteId = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value.trim();
-  if (!remoteId || remoteId === peer.id) return alert("IDを確認してください");
+  if (!remoteId || remoteId === peer.id) return alert("正しいIDを入力してください");
   const conn = peer.connect(remoteId);
   connections.push(conn);
   handleDataConnection(conn);
@@ -261,6 +268,5 @@ function setupRemoteVideo(call: any) {
     remoteVideo.autoplay = true; remoteVideo.playsInline = true;
     remoteVideo.srcObject = stream;
     document.querySelector('#video-grid')!.appendChild(remoteVideo);
-    call.on('close', () => remoteVideo.remove());
   });
 }
