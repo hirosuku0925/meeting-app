@@ -58,14 +58,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// --- 変数宣言 ---
+// --- 変数管理 ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const nameInput = document.querySelector<HTMLInputElement>('#user-name-input')!;
 
 let isCameraOn = true;
-let isMicOn = true; // マイクの状態
+let isMicOn = true;
 let isAvatarMode = false;
 let imgClose: HTMLImageElement | null = null;
 let imgOpen: HTMLImageElement | null = null;
@@ -87,7 +87,6 @@ faceMesh.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // 背景描画（カメラがONの時だけ）
   if (isCameraOn && results.image) {
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   } else {
@@ -95,20 +94,16 @@ faceMesh.onResults((results) => {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 
-  // アバター描画ロジック
   if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
     const landmarks = results.multiFaceLandmarks[0];
     if (isAvatarMode && imgClose) {
       const leftEye = landmarks[33], rightEye = landmarks[263];
       const angle = Math.atan2((rightEye.y - leftEye.y) * canvas.height, (rightEye.x - leftEye.x) * canvas.width);
-      
-      // 口の動き判定（マイクがOFFでもカメラが生きていれば口は動く）
       const isMouthOpen = Math.sqrt(Math.pow(landmarks[13].x - landmarks[14].x, 2) + Math.pow(landmarks[13].y - landmarks[14].y, 2)) > 0.025;
       
       const centerX = landmarks[1].x * canvas.width, centerY = landmarks[1].y * canvas.height;
       const radius = ((landmarks[454].x - landmarks[234].x) * canvas.width * 1.8) / 2;
 
-      // 発話リング（マイクがONで口が開いている時だけ青く光る）
       if (isMouthOpen && isMicOn) {
         ctx.beginPath();
         ctx.arc(centerX, centerY, radius + 6, 0, Math.PI * 2);
@@ -127,7 +122,6 @@ faceMesh.onResults((results) => {
       ctx.drawImage(targetImg, -radius, -radius, radius * 2, radius * 2);
       ctx.restore();
 
-      // ネームタグ
       const userName = nameInput.value || "User";
       ctx.font = "bold 14px sans-serif";
       const tw = ctx.measureText(userName).width;
@@ -150,7 +144,6 @@ navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio:
   video.onloadedmetadata = () => {
     video.play();
     const predict = async () => {
-      // カメラがONの時だけAIを動かす
       if (isCameraOn) await faceMesh.send({ image: video });
       requestAnimationFrame(predict);
     };
@@ -177,8 +170,6 @@ setupUpload('avatar-close', 'prev-close', 'label-close', (img) => imgClose = img
 setupUpload('avatar-open', 'prev-open', 'label-open', (img) => imgOpen = img);
 
 // --- ボタンイベント ---
-
-// カメラON/OFF
 document.querySelector('#camera-btn')?.addEventListener('click', () => {
   isCameraOn = !isCameraOn;
   if (localStream) localStream.getVideoTracks()[0].enabled = isCameraOn;
@@ -187,7 +178,6 @@ document.querySelector('#camera-btn')?.addEventListener('click', () => {
   btn.style.backgroundColor = isCameraOn ? "#2196F3" : "#f44336";
 });
 
-// マイクON/OFF
 document.querySelector('#mic-btn')?.addEventListener('click', () => {
   isMicOn = !isMicOn;
   if (localStream) localStream.getAudioTracks()[0].enabled = isMicOn;
@@ -196,7 +186,6 @@ document.querySelector('#mic-btn')?.addEventListener('click', () => {
   btn.style.backgroundColor = isMicOn ? "#4CAF50" : "#f44336";
 });
 
-// アバターモード切替
 document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
   isAvatarMode = !isAvatarMode;
   const btn = document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!;
@@ -206,35 +195,45 @@ document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
 
 document.querySelector('#hangup-btn')?.addEventListener('click', () => window.location.reload());
 
-// PeerJS関連は変更なし
+// --- PeerJS通信処理 ---
 const peer = new Peer();
 peer.on('open', (id) => {
   const statusEl = document.querySelector<HTMLElement>('#status');
   if (statusEl) statusEl.innerText = `あなたのID: ${id}`;
 });
-peer.on('call', (call) => {
-  const processedStream = canvas.captureStream(25);
-  localStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
-  call.answer(processedStream);
-  setupRemoteVideo(call);
-});
-document.querySelector('#connect-btn')?.addEventListener('click', () => {
-  const remoteId = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
-  if (!remoteId) return alert("IDを入力してください");
-  const processedStream = canvas.captureStream(25);
-  localStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
-  const call = peer.call(remoteId, processedStream);
-  setupRemoteVideo(call);
-});
+
 function setupRemoteVideo(call: any) {
   call.on('stream', (stream: MediaStream) => {
     const videoGrid = document.querySelector('#video-grid')!;
+    if (document.getElementById(`video-${call.peer}`)) return; // 重複防止
+
     const remoteVideo = document.createElement('video');
+    remoteVideo.id = `video-${call.peer}`;
     remoteVideo.style.width = "320px";
     remoteVideo.style.borderRadius = "15px";
     remoteVideo.autoplay = true;
     remoteVideo.playsInline = true;
     remoteVideo.srcObject = stream;
     videoGrid.appendChild(remoteVideo);
+
+    call.on('close', () => remoteVideo.remove());
   });
 }
+
+peer.on('call', (call) => {
+  if (call.peer === peer.id) return; // 自分自身は無視
+  const processedStream = canvas.captureStream(25);
+  localStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
+  call.answer(processedStream);
+  setupRemoteVideo(call);
+});
+
+document.querySelector('#connect-btn')?.addEventListener('click', () => {
+  const remoteId = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value.trim();
+  if (!remoteId || remoteId === peer.id) return alert("正しい接続先IDを入力してください");
+
+  const processedStream = canvas.captureStream(25);
+  localStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
+  const call = peer.call(remoteId, processedStream);
+  setupRemoteVideo(call);
+});
