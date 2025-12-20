@@ -4,7 +4,7 @@ import { FaceMesh } from '@mediapipe/face_mesh'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div>
-    <h1 style="color: #333; margin-bottom: 20px;">oVice風 バーチャルアバター会議室</h1>
+    <h1 style="color: #333; margin-bottom: 20px;">バーチャルアバター会議室</h1>
     
     <div id="video-grid" style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; padding: 10px;">
       <canvas id="local-canvas" width="480" height="360" style="width: 320px; border: 3px solid #646cff; border-radius: 15px; background: #222; box-shadow: 0 8px 16px rgba(0,0,0,0.2);"></canvas>
