@@ -104,14 +104,14 @@ faceMesh.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // 背景描画
-  if (isAvatarMode && imgClose && imgOpen) {
-    ctx.fillStyle = "#333";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-  } else if (isCameraOn && results.image) {
+  // 【修正ポイント】常にカメラ映像を土台として描画する
+  if (results.image) {
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-  } else {
-    ctx.fillStyle = "#111";
+  }
+
+  // アバターモードのとき、背景を少し暗くしてアバターを目立たせる（画像があるときだけ）
+  if (isAvatarMode && imgClose && imgOpen) {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.4)"; // 半透明の黒
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 
@@ -121,7 +121,6 @@ faceMesh.onResults((results) => {
     const centerY = landmarks[1].y * canvas.height;
     const radius = ((landmarks[454].x - landmarks[234].x) * canvas.width * 1.8) / 2;
 
-    // アバター描画（画像があるときだけ）
     if (isAvatarMode && imgClose && imgOpen) {
       const leftEye = landmarks[33], rightEye = landmarks[263];
       const angle = Math.atan2((rightEye.y - leftEye.y) * canvas.height, (rightEye.x - leftEye.x) * canvas.width);
@@ -146,7 +145,6 @@ faceMesh.onResults((results) => {
       ctx.fillStyle = "white"; ctx.textAlign = "center"; ctx.fillText(userName, centerX, centerY + radius + 27);
     }
 
-    // リアクション
     const now = Date.now();
     reactions = reactions.filter(r => now - r.time < 2000);
     reactions.forEach(r => {
@@ -203,7 +201,7 @@ document.querySelector('#mic-btn')?.addEventListener('click', () => {
 
 document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
   if (!imgClose || !imgOpen) {
-    alert("まずは画像を2枚選んでください！選ぶまではカメラ映像が表示されます。");
+    alert("まずは画像を2枚選んでください！");
   }
   isAvatarMode = !isAvatarMode;
   const btn = document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!;
