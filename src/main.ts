@@ -5,34 +5,37 @@ import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 let myName = "";
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <div style="max-width: 1200px; margin: 0 auto; font-family: sans-serif;">
-    <h1 style="font-size: 1.5rem;">超軽量 AI会議室</h1>
-    <div id="video-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; padding: 10px;">
-      <div class="video-container" style="position: relative; aspect-ratio: 4/3; background: #000; border-radius: 10px; overflow: hidden;">
+  <div style="max-width: 1000px; margin: 0 auto; background: #1a1a1a; color: white; min-height: 100vh; padding: 10px;">
+    <h1 style="font-size: 1.2rem; text-align: center;">高速・軽量 会議室</h1>
+    
+    <div id="video-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; margin-bottom: 20px;">
+      <div class="video-container" style="position: relative; aspect-ratio: 4/3; background: #333; border-radius: 8px; overflow: hidden;">
         <canvas id="local-canvas" width="320" height="240" style="width: 100%; height: 100%; object-fit: cover;"></canvas>
-        <div id="my-name-label" style="position: absolute; bottom: 5px; left: 5px; background: rgba(0,0,0,0.6); color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px;">自分</div>
+        <div id="my-name-label" style="position: absolute; bottom: 5px; left: 5px; background: rgba(0,0,0,0.7); padding: 2px 6px; border-radius: 4px; font-size: 10px;">自分</div>
       </div>
     </div>
 
-    <div class="card" style="padding: 15px; background: #f9f9f9; border-radius: 10px; margin-top: 10px;">
-      <input id="name-input" type="text" placeholder="名前を入力" style="width: 80%; padding: 8px; margin-bottom: 10px;">
-      <div style="display: flex; gap: 5px; flex-wrap: wrap; justify-content: center; margin-bottom: 10px;">
-        <button id="blur-btn" style="background-color: #4CAF50; font-size: 11px; padding: 5px 10px;">背景ぼかし: OFF</button>
-        <button id="share-btn" style="background-color: #2196F3; font-size: 11px; padding: 5px 10px;">画面共有</button>
-        <button id="hangup-btn" style="background-color: #f44336; font-size: 11px; padding: 5px 10px;">退出</button>
+    <div style="background: #2a2a2a; padding: 15px; border-radius: 12px; display: flex; flex-direction: column; gap: 10px;">
+      <input id="name-input" type="text" placeholder="名前を入力" style="padding: 10px; border-radius: 6px; border: none; color: black;">
+      
+      <div style="display: flex; gap: 5px; justify-content: center;">
+        <button id="blur-btn" style="flex: 1; background: #444; color: white; border: none; padding: 10px; border-radius: 6px; font-size: 11px; cursor: pointer;">ぼかし: OFF</button>
+        <button id="share-btn" style="flex: 1; background: #007bff; color: white; border: none; padding: 10px; border-radius: 6px; font-size: 11px; cursor: pointer;">画面共有</button>
+        <button id="hangup-btn" style="flex: 1; background: #dc3545; color: white; border: none; padding: 10px; border-radius: 6px; font-size: 11px; cursor: pointer;">退出</button>
       </div>
-      <div style="font-size: 11px; border-top: 1px solid #ddd; padding-top: 10px;">
-        <input id="remote-id-input" type="text" placeholder="相手のID" style="padding: 5px;">
-        <button id="connect-btn">接続</button>
+
+      <div style="display: flex; gap: 5px;">
+        <input id="remote-id-input" type="text" placeholder="相手のID" style="flex: 2; padding: 8px; border-radius: 6px; border: none; color: black;">
+        <button id="connect-btn" style="flex: 1; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer;">接続</button>
       </div>
-      <p id="status" style="font-size: 10px; color: #888; margin-top: 5px;">ID取得中...</p>
+      <p id="status" style="font-size: 10px; text-align: center; color: #aaa;">ID取得中...</p>
     </div>
     <video id="hidden-video" style="display:none" autoplay playsinline muted></video>
   </div>
 `
 
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
-const ctx = canvas.getContext('2d', { alpha: false })!; // アルファチャンネルを無効にして高速化
+const ctx = canvas.getContext('2d', { desynchronized: true })!; 
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const statusDisplay = document.querySelector<HTMLParagraphElement>('#status')!;
 const shareBtn = document.querySelector<HTMLButtonElement>('#share-btn')!;
@@ -48,58 +51,56 @@ const selfieSegmentation = new SelfieSegmentation({
   locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`
 });
 
-// 計算負荷の低いモデルを選択
-selfieSegmentation.setOptions({ modelSelection: 0 });
+// ここを修正：selfieMode に直し、modelSelection は 0（高速版）を指定
+selfieSegmentation.setOptions({ modelSelection: 0, selfieMode: false });
 
 selfieSegmentation.onResults((results) => {
   ctx.save();
-  // 画面共有中やぼかしOFFの時はAI処理結果をそのまま描画（CPU節約）
-  if (isScreenSharing || !isBlurred) {
+  if (!isBlurred || isScreenSharing) {
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   } else {
-    // ぼかし処理
-    ctx.globalCompositeOperation = 'copy';
-    ctx.filter = 'blur(4px)'; // ぼかし強度を下げて負荷軽減
+    // ぼかし処理を軽量化（一度ぼかしてからマスクで抜く）
+    ctx.filter = 'blur(4px)';
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-    
-    ctx.globalCompositeOperation = 'destination-atop';
     ctx.filter = 'none';
+    ctx.globalCompositeOperation = 'destination-atop';
     ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
-    
     ctx.globalCompositeOperation = 'destination-over';
-    ctx.fillStyle = '#222'; // 背景を単色にして塗りつぶし負荷を減らす
+    ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
   ctx.restore();
 });
 
 async function startCamera() {
-  // 通信量と負荷を最小限にするための超軽量設定
-  localCameraStream = await navigator.mediaDevices.getUserMedia({ 
-    video: { width: 320, height: 240, frameRate: 10 }, // 10fpsまで落とす
-    audio: true 
-  });
-  video.srcObject = localCameraStream;
-  video.onloadedmetadata = () => {
-    video.play();
-    processedStream = canvas.captureStream(10); // 送信も10fps
-    localCameraStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
-    
-    const sendVideo = async () => {
-      if (video.readyState >= 2) {
-        await selfieSegmentation.send({ image: video });
-      }
-      // 意図的にウェイトを置いてCPUを休ませる（約20fps相当）
-      setTimeout(() => {
-        requestAnimationFrame(sendVideo);
-      }, 50); 
+  try {
+    localCameraStream = await navigator.mediaDevices.getUserMedia({ 
+      video: { width: 320, height: 240, frameRate: { ideal: 15 } }, 
+      audio: true 
+    });
+    video.srcObject = localCameraStream;
+    video.onloadedmetadata = () => {
+      video.play();
+      // 相手に送るフレームレートを制限して軽くする
+      processedStream = canvas.captureStream(15);
+      localCameraStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
+      
+      const process = async () => {
+        if (!video.paused && !video.ended) {
+          await selfieSegmentation.send({ image: video });
+        }
+        // CPUを休ませるための微小な待ち時間（重要）
+        setTimeout(() => requestAnimationFrame(process), 40); 
+      };
+      process();
     };
-    sendVideo();
-  };
+  } catch (e) {
+    console.error("カメラエラー:", e);
+  }
 }
 startCamera();
 
-// --- 通信・ボタン処理（軽量版） ---
+// --- 各種イベント ---
 nameInput.addEventListener('input', () => {
   myName = nameInput.value;
   document.querySelector('#my-name-label')!.textContent = myName || "自分";
@@ -108,7 +109,7 @@ nameInput.addEventListener('input', () => {
 shareBtn.addEventListener('click', async () => {
   if (!isScreenSharing) {
     try {
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 10 }, audio: true });
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 } });
       video.srcObject = screenStream;
       isScreenSharing = true;
       shareBtn.innerText = "停止";
@@ -130,13 +131,12 @@ document.querySelector('#hangup-btn')?.addEventListener('click', () => {
 document.querySelector('#blur-btn')?.addEventListener('click', () => {
   isBlurred = !isBlurred;
   const btn = document.querySelector<HTMLButtonElement>('#blur-btn')!;
-  btn.innerText = isBlurred ? "背景ぼかし: ON" : "背景ぼかし: OFF";
-  btn.style.backgroundColor = isBlurred ? '#f44336' : '#4CAF50';
+  btn.innerText = isBlurred ? "ぼかし: ON" : "ぼかし: OFF";
+  btn.style.background = isBlurred ? '#dc3545' : '#444';
 });
 
 const peer = new Peer();
 peer.on('open', id => { statusDisplay.innerText = `あなたのID: ${id}`; });
-
 peer.on('call', (call) => {
   call.answer(processedStream);
   activeCalls.push(call);
@@ -145,7 +145,7 @@ peer.on('call', (call) => {
 
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const remoteId = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
-  if (!remoteId) return alert('IDを入力してください');
+  if (!remoteId) return;
   const call = peer.call(remoteId, processedStream, { metadata: { name: myName || "ゲスト" } });
   activeCalls.push(call);
   setupVideoCall(call, "相手"); 
@@ -154,7 +154,7 @@ document.querySelector('#connect-btn')?.addEventListener('click', () => {
 function setupVideoCall(call: MediaConnection, name: string) {
   const videoGrid = document.querySelector('#video-grid')!;
   const container = document.createElement('div');
-  container.style.cssText = "position: relative; aspect-ratio: 4/3; background: #000; border-radius: 10px; overflow: hidden;";
+  container.style.cssText = "position: relative; aspect-ratio: 4/3; background: #000; border-radius: 8px; overflow: hidden;";
 
   const remoteVideo = document.createElement('video');
   remoteVideo.style.cssText = "width: 100%; height: 100%; object-fit: cover;";
@@ -163,7 +163,7 @@ function setupVideoCall(call: MediaConnection, name: string) {
 
   const nameLabel = document.createElement('div');
   nameLabel.innerText = name;
-  nameLabel.style.cssText = "position: absolute; bottom: 5px; left: 5px; background: rgba(0,0,0,0.6); color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px;";
+  nameLabel.style.cssText = "position: absolute; bottom: 5px; left: 5px; background: rgba(0,0,0,0.7); color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px;";
 
   container.appendChild(remoteVideo);
   container.appendChild(nameLabel);
