@@ -4,35 +4,59 @@ import { FaceMesh } from '@mediapipe/face_mesh'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div>
-    <h1>oVice風 バーチャルアバター会議室</h1>
-    <div id="video-grid" style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; padding: 20px;">
-      <canvas id="local-canvas" width="480" height="360" style="width: 300px; border: 2px solid #646cff; border-radius: 10px; background: #333;"></canvas>
+    <h1 style="color: #333; margin-bottom: 20px;">oVice風 バーチャルアバター会議室</h1>
+    
+    <div id="video-grid" style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; padding: 10px;">
+      <canvas id="local-canvas" width="480" height="360" style="width: 320px; border: 3px solid #646cff; border-radius: 15px; background: #222; box-shadow: 0 8px 16px rgba(0,0,0,0.2);"></canvas>
     </div>
     
-    <div class="card">
-      <div style="display: flex; gap: 5px; flex-wrap: wrap; justify-content: center; margin-bottom: 10px;">
-        <button id="camera-btn" style="background-color: #2196F3;">カメラ: ON</button>
-        <button id="avatar-mode-btn" style="background-color: #555;">アバター: OFF</button>
-        <button id="hangup-btn" style="background-color: #f44336;">退出</button>
+    <div class="card" style="max-width: 500px; margin: 20px auto; padding: 25px; border-radius: 16px; background: #fff; box-shadow: 0 10px 25px rgba(0,0,0,0.1);">
+      <div style="display: flex; gap: 10px; justify-content: center; margin-bottom: 20px;">
+        <button id="camera-btn" style="background-color: #2196F3; flex: 1; font-weight: bold;">カメラ: ON</button>
+        <button id="avatar-mode-btn" style="background-color: #555; flex: 1; font-weight: bold;">アバター: OFF</button>
+        <button id="hangup-btn" style="background-color: #f44336; padding: 10px 15px;">退出</button>
       </div>
       
-      <div style="background: #f0f0f0; padding: 10px; border-radius: 8px; font-size: 12px; display: flex; flex-direction: column; gap: 8px; text-align: left;">
-        <strong>oViceアバター設定:</strong>
-        <input type="text" id="user-name-input" placeholder="表示名を入力" value="User Name" style="padding: 5px; border-radius: 4px; border: 1px solid #ccc;">
-        <label>👤 通常（真顔）：<input type="file" id="avatar-close" accept="image/*"></label>
-        <label>😮 発話（口開）：<input type="file" id="avatar-open" accept="image/*"></label>
+      <div style="background: #f8f9fa; border: 1px solid #e0e0e0; padding: 20px; border-radius: 12px; text-align: left;">
+        <h3 style="margin: 0 0 15px 0; font-size: 16px; color: #444; border-left: 4px solid #00e5ff; padding-left: 10px;">あばたーせってい</h3>
+        
+        <div style="margin-bottom: 15px;">
+          <label style="display: block; font-weight: bold; margin-bottom: 6px; font-size: 13px; color: #666;">なまえ</label>
+          <input type="text" id="user-name-input" placeholder="名前を入力" value="User Name" 
+            style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #ccc; box-sizing: border-box; font-size: 14px;">
+        </div>
+
+        <div style="display: flex; gap: 15px;">
+          <div style="flex: 1;">
+            <label style="display: block; font-weight: bold; margin-bottom: 6px; font-size: 13px; color: #666;">いつものかお</label>
+            <div style="border: 2px dashed #bbb; border-radius: 10px; height: 90px; position: relative; display: flex; align-items: center; justify-content: center; background: #fff; overflow: hidden;">
+              <span id="label-close" style="font-size: 11px; color: #999; text-align: center; padding: 5px;">がぞうを<br>えらぶ</span>
+              <img id="prev-close" style="display:none; position:absolute; width:100%; height:100%; object-fit:contain;">
+              <input type="file" id="avatar-close" accept="image/*" style="opacity: 0; position: absolute; width: 100%; height: 100%; cursor: pointer;">
+            </div>
+          </div>
+          <div style="flex: 1;">
+            <label style="display: block; font-weight: bold; margin-bottom: 6px; font-size: 13px; color: #666;">しゃべるとき</label>
+            <div style="border: 2px dashed #bbb; border-radius: 10px; height: 90px; position: relative; display: flex; align-items: center; justify-content: center; background: #fff; overflow: hidden;">
+              <span id="label-open" style="font-size: 11px; color: #999; text-align: center; padding: 5px;">がぞうを<br>えらぶ</span>
+              <img id="prev-open" style="display:none; position:absolute; width:100%; height:100%; object-fit:contain;">
+              <input type="file" id="avatar-open" accept="image/*" style="opacity: 0; position: absolute; width: 100%; height: 100%; cursor: pointer;">
+            </div>
+          </div>
+        </div>
       </div>
       
-      <div style="margin-top: 15px;">
-        <input id="remote-id-input" type="text" placeholder="相手のIDを入力" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc;">
-        <button id="connect-btn" style="margin-left: 5px;">接続</button>
+      <div style="margin-top: 20px; display: flex; gap: 8px;">
+        <input id="remote-id-input" type="text" placeholder="相手のIDを入力" style="flex: 2; padding: 12px; border-radius: 8px; border: 1px solid #ddd;">
+        <button id="connect-btn" style="flex: 1; background-color: #646cff; color: white; font-weight: bold; border: none; border-radius: 8px; cursor: pointer;">接続する</button>
       </div>
-      <p id="status" style="font-size: 14px; color: #666;">ID取得中...</p>
+      <p id="status" style="font-size: 13px; color: #999; margin-top: 15px;">あなたのID: 取得中...</p>
     </div>
     <video id="hidden-video" style="display:none" autoplay playsinline muted></video>
   </div>
 `
 
+// --- 以下のロジック部分は変更なし ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
@@ -44,7 +68,6 @@ let imgClose: HTMLImageElement | null = null;
 let imgOpen: HTMLImageElement | null = null;
 let localStream: MediaStream;
 
-// --- FaceMesh (AI) の設定 ---
 const faceMesh = new FaceMesh({
   locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
 });
@@ -59,36 +82,17 @@ faceMesh.setOptions({
 faceMesh.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (results.image) ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
 
-  // 1. 背景描画（常にカメラ映像を出す）
-  if (results.image) {
-    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-  }
-
-  // 2. 顔認識時のアバター描画
   if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
     const landmarks = results.multiFaceLandmarks[0];
-
     if (isAvatarMode && imgClose) {
-      // 角度計算
-      const leftEye = landmarks[33];
-      const rightEye = landmarks[263];
+      const leftEye = landmarks[33], rightEye = landmarks[263];
       const angle = Math.atan2((rightEye.y - leftEye.y) * canvas.height, (rightEye.x - leftEye.x) * canvas.width);
+      const isMouthOpen = Math.sqrt(Math.pow(landmarks[13].x - landmarks[14].x, 2) + Math.pow(landmarks[13].y - landmarks[14].y, 2)) > 0.025;
+      const centerX = landmarks[1].x * canvas.width, centerY = landmarks[1].y * canvas.height;
+      const radius = ((landmarks[454].x - landmarks[234].x) * canvas.width * 1.8) / 2;
 
-      // 口の開き（発話判定）
-      const topLip = landmarks[13];
-      const bottomLip = landmarks[14];
-      const dist = Math.sqrt(Math.pow(topLip.x - bottomLip.x, 2) + Math.pow(topLip.y - bottomLip.y, 2));
-      const isMouthOpen = dist > 0.025;
-
-      // 位置とサイズ
-      const centerX = landmarks[1].x * canvas.width;
-      const centerY = landmarks[1].y * canvas.height;
-      const faceLeft = landmarks[234].x * canvas.width;
-      const faceRight = landmarks[454].x * canvas.width;
-      const radius = ((faceRight - faceLeft) * 1.8) / 2;
-
-      // --- oVice風：発話リング ---
       if (isMouthOpen) {
         ctx.beginPath();
         ctx.arc(centerX, centerY, radius + 6, 0, Math.PI * 2);
@@ -97,30 +101,26 @@ faceMesh.onResults((results) => {
         ctx.stroke();
       }
 
-      // --- oVice風：円形クリッピング描画 ---
       ctx.save();
       ctx.beginPath();
       ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
       ctx.clip();
-      
       ctx.translate(centerX, centerY);
       ctx.rotate(angle);
-      
       const targetImg = (isMouthOpen && imgOpen) ? imgOpen : imgClose;
       ctx.drawImage(targetImg, -radius, -radius, radius * 2, radius * 2);
       ctx.restore();
 
-      // --- oVice風：ネームタグ ---
       const userName = nameInput.value || "User";
       ctx.font = "bold 14px sans-serif";
       const tw = ctx.measureText(userName).width;
       ctx.fillStyle = "rgba(0,0,0,0.7)";
       ctx.beginPath();
-      ctx.roundRect(centerX - (tw+16)/2, centerY + radius + 8, tw+16, 22, 11);
+      ctx.roundRect(centerX - (tw+16)/2, centerY + radius + 10, tw+16, 24, 12);
       ctx.fill();
       ctx.fillStyle = "white";
       ctx.textAlign = "center";
-      ctx.fillText(userName, centerX, centerY + radius + 24);
+      ctx.fillText(userName, centerX, centerY + radius + 27);
     }
   } else if (!isCameraOn) {
     ctx.fillStyle = "black";
@@ -129,7 +129,6 @@ faceMesh.onResults((results) => {
   ctx.restore();
 });
 
-// --- カメラ制御 ---
 navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true }).then(stream => {
   localStream = stream;
   video.srcObject = stream;
@@ -143,21 +142,23 @@ navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio:
   };
 });
 
-// --- 画像アップロード ---
-const setupUpload = (id: string, cb: (img: HTMLImageElement) => void) => {
-  document.querySelector<HTMLInputElement>(`#${id}`)?.addEventListener('change', (e) => {
+const setupUpload = (inputId: string, prevId: string, labelId: string, cb: (img: HTMLImageElement) => void) => {
+  const input = document.querySelector<HTMLInputElement>(`#${inputId}`)!;
+  const prev = document.querySelector<HTMLImageElement>(`#${prevId}`)!;
+  const label = document.querySelector<HTMLElement>(`#${labelId}`)!;
+  input.addEventListener('change', (e) => {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (file) {
       const img = new Image();
-      img.onload = () => cb(img);
-      img.src = URL.createObjectURL(file);
+      const url = URL.createObjectURL(file);
+      img.onload = () => { cb(img); prev.src = url; prev.style.display = 'block'; label.style.display = 'none'; };
+      img.src = url;
     }
   });
 };
-setupUpload('avatar-close', (img) => imgClose = img);
-setupUpload('avatar-open', (img) => imgOpen = img);
+setupUpload('avatar-close', 'prev-close', 'label-close', (img) => imgClose = img);
+setupUpload('avatar-open', 'prev-open', 'label-open', (img) => imgOpen = img);
 
-// --- ボタン・通信処理 ---
 document.querySelector('#camera-btn')?.addEventListener('click', () => {
   isCameraOn = !isCameraOn;
   if (localStream) localStream.getVideoTracks()[0].enabled = isCameraOn;
@@ -201,8 +202,8 @@ function setupRemoteVideo(call: any) {
   call.on('stream', (stream: MediaStream) => {
     const videoGrid = document.querySelector('#video-grid')!;
     const remoteVideo = document.createElement('video');
-    remoteVideo.style.width = "300px";
-    remoteVideo.style.borderRadius = "10px";
+    remoteVideo.style.width = "320px";
+    remoteVideo.style.borderRadius = "15px";
     remoteVideo.autoplay = true;
     remoteVideo.playsInline = true;
     remoteVideo.srcObject = stream;
