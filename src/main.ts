@@ -6,7 +6,7 @@ let myName = "";
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="max-width: 1000px; margin: 0 auto; background: #1a1a1a; color: white; min-height: 100vh; padding: 10px; font-family: sans-serif;">
-    <h1 style="font-size: 1.2rem; text-align: center; margin-bottom: 10px;">AI会議室 (高画質・軽量版)</h1>
+    <h1 style="font-size: 1.2rem; text-align: center; margin-bottom: 10px;">AI会議室 (安定・くっきり版)</h1>
     
     <div id="video-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-bottom: 15px;">
       <div class="video-container" style="position: relative; aspect-ratio: 4/3; background: #000; border-radius: 12px; overflow: hidden; border: 1px solid #444;">
@@ -50,7 +50,8 @@ const selfieSegmentation = new SelfieSegmentation({
   locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`
 });
 
-selfieSegmentation.setOptions({ modelSelection: 1, selfieMode: false }); // model 1の方が境界が綺麗です
+// 軽量モデル(0)を使用し、鏡合わせ(selfieMode)を無効にします
+selfieSegmentation.setOptions({ modelSelection: 0, selfieMode: false });
 
 selfieSegmentation.onResults((results) => {
   ctx.save();
@@ -59,17 +60,18 @@ selfieSegmentation.onResults((results) => {
   if (!isBlurred || isScreenSharing) {
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   } else {
-    // 1. まず背景をぼかして描画
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.filter = 'blur(10px)'; // 背景のぼかし具合
+    // 【修正ポイント】自分を消さないための新しい描き方
+    
+    // 1. まず背景として、全体をぼかして描く
+    ctx.filter = 'blur(10px)';
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-    
-    // 2. 自分の形にマスクを適用（自分をくっきりさせる）
     ctx.filter = 'none';
-    ctx.globalCompositeOperation = 'destination-out'; // マスク部分を削る
+
+    // 2. 「自分だけの形」を取り出す設定にする
+    ctx.globalCompositeOperation = 'destination-in';
     ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
-    
-    // 3. 削った部分に「ぼけていない自分」を重ねる
+
+    // 3. その上に、ぼけていない自分自身を重ねる
     ctx.globalCompositeOperation = 'destination-over';
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   }
@@ -96,18 +98,16 @@ async function startCamera() {
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
           }
         }
-        // カクつき防止のため、少しだけ待機を入れる
+        // CPUを少し休ませて「かくつき」を防ぐ
         setTimeout(() => requestAnimationFrame(process), 30); 
       };
       process();
     };
-  } catch (e) {
-    console.error(e);
-  }
+  } catch (e) { console.error(e); }
 }
 startCamera();
 
-// --- 各種イベント（変更なし） ---
+// --- ボタン・通信処理 ---
 nameInput.addEventListener('input', () => {
   myName = nameInput.value;
   document.querySelector('#my-name-label')!.textContent = myName || "自分";
