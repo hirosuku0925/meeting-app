@@ -4,7 +4,7 @@ import { FaceMesh } from '@mediapipe/face_mesh'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div>
-    <h1>AI顔追跡アバター会議室</h1>
+    <h1>oVice風 バーチャルアバター会議室</h1>
     <div id="video-grid" style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; padding: 20px;">
       <canvas id="local-canvas" width="480" height="360" style="width: 300px; border: 2px solid #646cff; border-radius: 10px; background: #333;"></canvas>
     </div>
@@ -17,9 +17,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
       
       <div style="background: #f0f0f0; padding: 10px; border-radius: 8px; font-size: 12px; display: flex; flex-direction: column; gap: 8px; text-align: left;">
-        <strong>アバター設定（PNG推奨）:</strong>
-        <label>👤 通常の顔：<input type="file" id="avatar-close" accept="image/*"></label>
-        <label>😮 口を開けた顔：<input type="file" id="avatar-open" accept="image/*"></label>
+        <strong>oViceアバター設定:</strong>
+        <input type="text" id="user-name-input" placeholder="表示名を入力" value="User Name" style="padding: 5px; border-radius: 4px; border: 1px solid #ccc;">
+        <label>👤 通常（真顔）：<input type="file" id="avatar-close" accept="image/*"></label>
+        <label>😮 発話（口開）：<input type="file" id="avatar-open" accept="image/*"></label>
       </div>
       
       <div style="margin-top: 15px;">
@@ -35,6 +36,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
+const nameInput = document.querySelector<HTMLInputElement>('#user-name-input')!;
 
 let isCameraOn = true;
 let isAvatarMode = false;
@@ -58,73 +60,96 @@ faceMesh.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // 1. 背景としてカメラ映像を常に描画（黒画面防止）
+  // 1. 背景描画（常にカメラ映像を出す）
   if (results.image) {
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   }
 
-  // 2. 顔が検知されている場合の処理
+  // 2. 顔認識時のアバター描画
   if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
     const landmarks = results.multiFaceLandmarks[0];
 
     if (isAvatarMode && imgClose) {
-      // 背景を塗りつぶしたい場合はここを有効に（今は透過で重ねる設定）
-      // ctx.fillStyle = "#222"; 
-      // ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // 角度計算
+      const leftEye = landmarks[33];
+      const rightEye = landmarks[263];
+      const angle = Math.atan2((rightEye.y - leftEye.y) * canvas.height, (rightEye.x - leftEye.x) * canvas.width);
 
-      // 口の開き具合判定（上下の唇の距離）
+      // 口の開き（発話判定）
       const topLip = landmarks[13];
       const bottomLip = landmarks[14];
-      const distance = Math.sqrt(Math.pow(topLip.x - bottomLip.x, 2) + Math.pow(topLip.y - bottomLip.y, 2));
-      const isMouthOpen = distance > 0.025;
+      const dist = Math.sqrt(Math.pow(topLip.x - bottomLip.x, 2) + Math.pow(topLip.y - bottomLip.y, 2));
+      const isMouthOpen = dist > 0.025;
 
-      // 顔の座標計算
+      // 位置とサイズ
+      const centerX = landmarks[1].x * canvas.width;
+      const centerY = landmarks[1].y * canvas.height;
       const faceLeft = landmarks[234].x * canvas.width;
       const faceRight = landmarks[454].x * canvas.width;
-      const faceTop = landmarks[10].y * canvas.height;
-      const faceBottom = landmarks[152].y * canvas.height;
-      
-      const scale = 2.8; // アバターのサイズ（顔より少し大きく）
-      const width = (faceRight - faceLeft) * scale;
-      const height = (faceBottom - faceTop) * scale;
-      const centerX = (faceLeft + faceRight) / 2 - width / 2;
-      const centerY = (faceTop + faceBottom) / 2 - height / 2;
+      const radius = ((faceRight - faceLeft) * 1.8) / 2;
 
-      // 画像の切り替え（口パク）
+      // --- oVice風：発話リング ---
+      if (isMouthOpen) {
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius + 6, 0, Math.PI * 2);
+        ctx.strokeStyle = '#00e5ff';
+        ctx.lineWidth = 4;
+        ctx.stroke();
+      }
+
+      // --- oVice風：円形クリッピング描画 ---
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+      ctx.clip();
+      
+      ctx.translate(centerX, centerY);
+      ctx.rotate(angle);
+      
       const targetImg = (isMouthOpen && imgOpen) ? imgOpen : imgClose;
-      ctx.drawImage(targetImg, centerX, centerY, width, height);
+      ctx.drawImage(targetImg, -radius, -radius, radius * 2, radius * 2);
+      ctx.restore();
+
+      // --- oVice風：ネームタグ ---
+      const userName = nameInput.value || "User";
+      ctx.font = "bold 14px sans-serif";
+      const tw = ctx.measureText(userName).width;
+      ctx.fillStyle = "rgba(0,0,0,0.7)";
+      ctx.beginPath();
+      ctx.roundRect(centerX - (tw+16)/2, centerY + radius + 8, tw+16, 22, 11);
+      ctx.fill();
+      ctx.fillStyle = "white";
+      ctx.textAlign = "center";
+      ctx.fillText(userName, centerX, centerY + radius + 24);
     }
   } else if (!isCameraOn) {
-    // カメラOFFかつ顔未検知なら真っ黒
     ctx.fillStyle = "black";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
   ctx.restore();
 });
 
-// --- カメラの開始 ---
+// --- カメラ制御 ---
 navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true }).then(stream => {
   localStream = stream;
   video.srcObject = stream;
   video.onloadedmetadata = () => {
     video.play();
     const predict = async () => {
-      if (isCameraOn) {
-        await faceMesh.send({ image: video });
-      }
+      if (isCameraOn) await faceMesh.send({ image: video });
       requestAnimationFrame(predict);
     };
     predict();
   };
-}).catch(err => console.error("カメラの起動に失敗しました:", err));
+});
 
-// --- 画像アップロード設定 ---
-const setupUpload = (id: string, callback: (img: HTMLImageElement) => void) => {
+// --- 画像アップロード ---
+const setupUpload = (id: string, cb: (img: HTMLImageElement) => void) => {
   document.querySelector<HTMLInputElement>(`#${id}`)?.addEventListener('change', (e) => {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (file) {
       const img = new Image();
-      img.onload = () => callback(img);
+      img.onload = () => cb(img);
       img.src = URL.createObjectURL(file);
     }
   });
@@ -132,7 +157,7 @@ const setupUpload = (id: string, callback: (img: HTMLImageElement) => void) => {
 setupUpload('avatar-close', (img) => imgClose = img);
 setupUpload('avatar-open', (img) => imgOpen = img);
 
-// --- ボタンイベント ---
+// --- ボタン・通信処理 ---
 document.querySelector('#camera-btn')?.addEventListener('click', () => {
   isCameraOn = !isCameraOn;
   if (localStream) localStream.getVideoTracks()[0].enabled = isCameraOn;
@@ -148,19 +173,14 @@ document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
   btn.style.backgroundColor = isAvatarMode ? "#FFC107" : "#555";
 });
 
-document.querySelector('#hangup-btn')?.addEventListener('click', () => {
-  window.location.reload();
-});
+document.querySelector('#hangup-btn')?.addEventListener('click', () => window.location.reload());
 
-// --- PeerJS (通信) 設定 ---
 const peer = new Peer();
-const statusEl = document.querySelector<HTMLElement>('#status');
-
-peer.on('open', (id: string) => {
+peer.on('open', (id) => {
+  const statusEl = document.querySelector<HTMLElement>('#status');
   if (statusEl) statusEl.innerText = `あなたのID: ${id}`;
 });
 
-// 相手からの着信処理
 peer.on('call', (call) => {
   const processedStream = canvas.captureStream(25);
   localStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
@@ -168,11 +188,9 @@ peer.on('call', (call) => {
   setupRemoteVideo(call);
 });
 
-// 自分から接続
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const remoteId = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
   if (!remoteId) return alert("IDを入力してください");
-  
   const processedStream = canvas.captureStream(25);
   localStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
   const call = peer.call(remoteId, processedStream);
