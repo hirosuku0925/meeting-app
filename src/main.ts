@@ -4,18 +4,19 @@ import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div>
-    <h1>AIバーチャル背景会議室</h1>
+    <h1>AIバーチャル背景 & 画面共有 会議室</h1>
     <div id="video-grid" style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; padding: 20px;">
       <canvas id="local-canvas" width="480" height="360" style="width: 300px; border: 2px solid #646cff; border-radius: 10px;"></canvas>
     </div>
     <div class="card">
       <div style="margin-bottom: 10px; display: flex; flex-direction: column; gap: 10px; align-items: center;">
-        <div style="display: flex; gap: 5px;">
+        <div style="display: flex; gap: 5px; flex-wrap: wrap; justify-content: center;">
           <button id="blur-btn" style="background-color: #4CAF50;">背景ぼかし: OFF</button>
+          <button id="share-btn" style="background-color: #2196F3;">画面共有を開始</button>
           <button id="hangup-btn" style="background-color: #f44336;">退出する</button>
         </div>
         <div style="background: #f0f0f0; padding: 10px; border-radius: 8px; font-size: 14px;">
-          <label>好きな背景画像を選択：</label>
+          <label>背景画像：</label>
           <input type="file" id="bg-upload" accept="image/*" style="font-size: 12px;">
         </div>
       </div>
@@ -32,13 +33,15 @@ const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const statusDisplay = document.querySelector<HTMLParagraphElement>('#status')!;
 const bgInput = document.querySelector<HTMLInputElement>('#bg-upload')!;
+const shareBtn = document.querySelector<HTMLButtonElement>('#share-btn')!;
 
 let isBlurred = false;
+let isScreenSharing = false;
 let customBgImage: HTMLImageElement | null = null;
 let processedStream: MediaStream;
 let activeCalls: MediaConnection[] = [];
+let localCameraStream: MediaStream;
 
-// AIの設定
 const selfieSegmentation = new SelfieSegmentation({
   locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`
 });
@@ -48,57 +51,35 @@ selfieSegmentation.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   
-  // 1. 人間の形（マスク）を描画
-  ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
-  
-  // 2. 背景を描画する設定
-  ctx.globalCompositeOperation = 'source-out';
-  
-  if (customBgImage) {
-    // アップロードされた画像がある場合、それを描画
-    ctx.drawImage(customBgImage, 0, 0, canvas.width, canvas.height);
-  } else if (isBlurred) {
-    // ぼかしONの場合、元の映像をぼかして描画
-    ctx.filter = 'blur(8px)';
+  if (isScreenSharing) {
+    // 画面共有中はAI処理をせず、そのまま描画
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-    ctx.filter = 'none';
   } else {
-    // 何も指定がなければそのままの映像
+    // 通常時はAI背景合成
+    ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
+    ctx.globalCompositeOperation = 'source-out';
+    if (customBgImage) {
+      ctx.drawImage(customBgImage, 0, 0, canvas.width, canvas.height);
+    } else if (isBlurred) {
+      ctx.filter = 'blur(8px)';
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+      ctx.filter = 'none';
+    } else {
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+    }
+    ctx.globalCompositeOperation = 'destination-over';
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   }
-
-  // 3. 人間を重ねる
-  ctx.globalCompositeOperation = 'destination-over';
-  ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-  
   ctx.restore();
 });
 
-// 画像アップロードの処理
-bgInput.addEventListener('change', (e) => {
-  const file = (e.target as HTMLInputElement).files?.[0];
-  if (!file) return;
-
-  const reader = new FileReader();
-  reader.onload = (event) => {
-    const img = new Image();
-    img.onload = () => {
-      customBgImage = img;
-      isBlurred = false; // 画像が優先されるようにぼかしはOFF風に
-    };
-    img.src = event.target?.result as string;
-  };
-  reader.readAsDataURL(file);
-});
-
-// カメラ開始
 async function startCamera() {
-  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true });
-  video.srcObject = stream;
+  localCameraStream = await navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true });
+  video.srcObject = localCameraStream;
   video.onloadedmetadata = () => {
     video.play();
     processedStream = canvas.captureStream(20);
-    stream.getAudioTracks().forEach(track => processedStream.addTrack(track));
+    localCameraStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
     const sendVideo = async () => {
       if (video.srcObject) {
         await selfieSegmentation.send({ image: video });
@@ -110,7 +91,45 @@ async function startCamera() {
 }
 startCamera();
 
-// 退出処理
+// 画面共有の切り替え
+shareBtn.addEventListener('click', async () => {
+  if (!isScreenSharing) {
+    try {
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      video.srcObject = screenStream;
+      isScreenSharing = true;
+      shareBtn.innerText = "画面共有を停止";
+      shareBtn.style.backgroundColor = "#ff9800";
+
+      // 画面共有が終了（ブラウザ側の停止ボタンなど）した時の処理
+      screenStream.getVideoTracks()[0].onended = () => stopScreenShare();
+    } catch (err) {
+      console.error("画面共有に失敗:", err);
+    }
+  } else {
+    stopScreenShare();
+  }
+});
+
+function stopScreenShare() {
+  video.srcObject = localCameraStream;
+  isScreenSharing = false;
+  shareBtn.innerText = "画面共有を開始";
+  shareBtn.style.backgroundColor = "#2196F3";
+}
+
+bgInput.addEventListener('change', (e) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    const img = new Image();
+    img.onload = () => { customBgImage = img; isBlurred = false; };
+    img.src = event.target?.result as string;
+  };
+  reader.readAsDataURL(file);
+});
+
 document.querySelector('#hangup-btn')?.addEventListener('click', () => {
   activeCalls.forEach(call => call.close());
   const stream = video.srcObject as MediaStream;
@@ -118,9 +137,8 @@ document.querySelector('#hangup-btn')?.addEventListener('click', () => {
   window.location.reload();
 });
 
-// ぼかしボタン（画像がある場合は画像を消してぼかしに切り替え）
 document.querySelector('#blur-btn')?.addEventListener('click', () => {
-  customBgImage = null; // 画像をクリア
+  customBgImage = null;
   isBlurred = !isBlurred;
   const btn = document.querySelector<HTMLButtonElement>('#blur-btn')!;
   btn.innerText = isBlurred ? "背景ぼかし: ON" : "背景ぼかし: OFF";
