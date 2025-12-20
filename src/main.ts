@@ -6,16 +6,16 @@ let myName = "";
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="max-width: 1000px; margin: 0 auto; background: #1a1a1a; color: white; min-height: 100vh; padding: 10px; font-family: sans-serif;">
-    <h1 style="font-size: 1.2rem; text-align: center; margin-bottom: 10px;">超軽量 会議室</h1>
+    <h1 style="font-size: 1.2rem; text-align: center; margin-bottom: 10px;">AI会議室 (高画質・軽量版)</h1>
     
-    <div id="video-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; margin-bottom: 15px;">
-      <div class="video-container" style="position: relative; aspect-ratio: 4/3; background: #333; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
-        <canvas id="local-canvas" width="320" height="240" style="width: 100%; height: 100%; object-fit: cover;"></canvas>
+    <div id="video-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-bottom: 15px;">
+      <div class="video-container" style="position: relative; aspect-ratio: 4/3; background: #000; border-radius: 12px; overflow: hidden; border: 1px solid #444;">
+        <canvas id="local-canvas" width="480" height="360" style="width: 100%; height: 100%; object-fit: cover;"></canvas>
         <div id="my-name-label" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); padding: 2px 8px; border-radius: 4px; font-size: 11px;">自分</div>
       </div>
     </div>
 
-    <div style="background: #2a2a2a; padding: 15px; border-radius: 15px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.3);">
+    <div style="background: #2a2a2a; padding: 15px; border-radius: 15px; display: flex; flex-direction: column; gap: 12px;">
       <input id="name-input" type="text" placeholder="名前を入力" style="padding: 12px; border-radius: 8px; border: none; color: black; font-size: 14px;">
       
       <div style="display: flex; gap: 8px; justify-content: center;">
@@ -35,7 +35,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 `
 
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
-const ctx = canvas.getContext('2d', { alpha: false })!; // 透過をオフにして高速化
+const ctx = canvas.getContext('2d', { alpha: false })!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const statusDisplay = document.querySelector<HTMLParagraphElement>('#status')!;
 const shareBtn = document.querySelector<HTMLButtonElement>('#share-btn')!;
@@ -50,52 +50,54 @@ const selfieSegmentation = new SelfieSegmentation({
   locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`
 });
 
-selfieSegmentation.setOptions({ modelSelection: 0, selfieMode: false });
+selfieSegmentation.setOptions({ modelSelection: 1, selfieMode: false }); // model 1の方が境界が綺麗です
 
 selfieSegmentation.onResults((results) => {
-  if (!isBlurred || isScreenSharing) {
-    // ぼかしOFFの時はAIの結果を待たずに描画したいが、ループを統一するためここで描画
-    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-    return;
-  }
-  
-  // ぼかし処理（極限まで工程を減らす）
   ctx.save();
-  ctx.filter = 'blur(4px)';
-  ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-  ctx.filter = 'none';
-  ctx.globalCompositeOperation = 'destination-atop';
-  ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
-  ctx.globalCompositeOperation = 'destination-over';
-  ctx.fillStyle = '#1a1a1a';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!isBlurred || isScreenSharing) {
+    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+  } else {
+    // 1. まず背景をぼかして描画
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.filter = 'blur(10px)'; // 背景のぼかし具合
+    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+    
+    // 2. 自分の形にマスクを適用（自分をくっきりさせる）
+    ctx.filter = 'none';
+    ctx.globalCompositeOperation = 'destination-out'; // マスク部分を削る
+    ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
+    
+    // 3. 削った部分に「ぼけていない自分」を重ねる
+    ctx.globalCompositeOperation = 'destination-over';
+    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+  }
   ctx.restore();
 });
 
 async function startCamera() {
   try {
-    // 解像度をさらに下げ、フレームレートを10fpsに固定（固まらないための最重要設定）
     localCameraStream = await navigator.mediaDevices.getUserMedia({ 
-      video: { width: 320, height: 240, frameRate: 10 }, 
+      video: { width: 480, height: 360, frameRate: 15 }, 
       audio: true 
     });
     video.srcObject = localCameraStream;
     video.onloadedmetadata = () => {
       video.play();
-      processedStream = canvas.captureStream(10);
+      processedStream = canvas.captureStream(15);
       localCameraStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
       
       const process = async () => {
         if (!video.paused && !video.ended) {
-          // ぼかしONの時だけAIを動かす。OFFの時は単純描画のみにして負荷をゼロにする
           if (isBlurred && !isScreenSharing) {
             await selfieSegmentation.send({ image: video });
           } else {
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
           }
         }
-        // 次のフレームまでしっかり休ませる（約10fps動作）
-        setTimeout(() => requestAnimationFrame(process), 100); 
+        // カクつき防止のため、少しだけ待機を入れる
+        setTimeout(() => requestAnimationFrame(process), 30); 
       };
       process();
     };
@@ -105,7 +107,7 @@ async function startCamera() {
 }
 startCamera();
 
-// --- 各種イベント ---
+// --- 各種イベント（変更なし） ---
 nameInput.addEventListener('input', () => {
   myName = nameInput.value;
   document.querySelector('#my-name-label')!.textContent = myName || "自分";
@@ -114,7 +116,7 @@ nameInput.addEventListener('input', () => {
 shareBtn.addEventListener('click', async () => {
   if (!isScreenSharing) {
     try {
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 10 } });
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 } });
       video.srcObject = screenStream;
       isScreenSharing = true;
       shareBtn.innerText = "停止";
