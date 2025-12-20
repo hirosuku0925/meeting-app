@@ -4,16 +4,17 @@ import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div>
-    <h1>AIバーチャル背景会議室</h1>
+    <h1>AIバーチャル背景 & 画面共有 会議室</h1>
     <div id="video-grid" style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; padding: 20px;">
       <canvas id="local-canvas" width="480" height="360" style="width: 300px; border: 2px solid #646cff; border-radius: 10px;"></canvas>
     </div>
     
     <div class="card">
       <div style="margin-bottom: 10px; display: flex; flex-direction: column; gap: 10px; align-items: center;">
-        <div style="display: flex; gap: 5px;">
+        <div style="display: flex; gap: 5px; flex-wrap: wrap; justify-content: center;">
           <button id="mic-btn" style="background-color: #2196F3;">マイク: ON</button>
           <button id="camera-btn" style="background-color: #2196F3;">カメラ: ON</button>
+          <button id="share-btn" style="background-color: #9C27B0;">画面共有: OFF</button>
           <button id="blur-btn" style="background-color: #4CAF50;">背景ぼかし: OFF</button>
           <button id="hangup-btn" style="background-color: #f44336;">退出</button>
         </div>
@@ -38,11 +39,11 @@ const bgInput = document.querySelector<HTMLInputElement>('#bg-upload')!;
 
 let isBlurred = false;
 let customBgImage: HTMLImageElement | null = null;
-let localStream: MediaStream; // 元のカメラ・マイクデータ
-let processedStream: MediaStream; // AI加工後のデータ
+let localStream: MediaStream;
+let processedStream: MediaStream;
+let screenStream: MediaStream | null = null;
 let activeCalls: MediaConnection[] = [];
 
-// AIの設定
 const selfieSegmentation = new SelfieSegmentation({
   locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`
 });
@@ -51,25 +52,29 @@ selfieSegmentation.setOptions({ modelSelection: 0 });
 selfieSegmentation.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
-  ctx.globalCompositeOperation = 'source-out';
   
-  if (customBgImage) {
-    ctx.drawImage(customBgImage, 0, 0, canvas.width, canvas.height);
-  } else if (isBlurred) {
-    ctx.filter = 'blur(8px)';
-    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-    ctx.filter = 'none';
+  // 画面共有中はAI背景処理をスキップして画面を描画
+  if (screenStream) {
+    ctx.drawImage(screenStream.getVideoTracks()[0] as any, 0, 0, canvas.width, canvas.height);
   } else {
+    // 通常のAI背景処理
+    ctx.drawImage(results.segmentationMask, 0, 0, canvas.width, canvas.height);
+    ctx.globalCompositeOperation = 'source-out';
+    if (customBgImage) {
+      ctx.drawImage(customBgImage, 0, 0, canvas.width, canvas.height);
+    } else if (isBlurred) {
+      ctx.filter = 'blur(8px)';
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+      ctx.filter = 'none';
+    } else {
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+    }
+    ctx.globalCompositeOperation = 'destination-over';
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   }
-
-  ctx.globalCompositeOperation = 'destination-over';
-  ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   ctx.restore();
 });
 
-// カメラ開始
 async function startCamera() {
   localStream = await navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true });
   video.srcObject = localStream;
@@ -89,7 +94,36 @@ async function startCamera() {
 }
 startCamera();
 
-// マイクON/OFF
+// 画面共有ボタンの処理
+document.querySelector('#share-btn')?.addEventListener('click', async () => {
+  const btn = document.querySelector<HTMLButtonElement>('#share-btn')!;
+  if (!screenStream) {
+    try {
+      screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      btn.innerText = "画面共有: ON";
+      btn.style.backgroundColor = "#E91E63";
+      
+      // 共有停止を検知したとき
+      screenStream.getVideoTracks()[0].onended = () => {
+        stopScreenShare();
+      };
+    } catch (err) {
+      console.error(err);
+    }
+  } else {
+    stopScreenShare();
+  }
+});
+
+function stopScreenShare() {
+  const btn = document.querySelector<HTMLButtonElement>('#share-btn')!;
+  screenStream?.getTracks().forEach(track => track.stop());
+  screenStream = null;
+  btn.innerText = "画面共有: OFF";
+  btn.style.backgroundColor = "#9C27B0";
+}
+
+// 他のボタン（マイク、カメラ、背景など）は前回のまま
 document.querySelector('#mic-btn')?.addEventListener('click', () => {
   const audioTrack = localStream.getAudioTracks()[0];
   audioTrack.enabled = !audioTrack.enabled;
@@ -98,7 +132,6 @@ document.querySelector('#mic-btn')?.addEventListener('click', () => {
   btn.style.backgroundColor = audioTrack.enabled ? "#2196F3" : "#f44336";
 });
 
-// カメラON/OFF
 document.querySelector('#camera-btn')?.addEventListener('click', () => {
   const videoTrack = localStream.getVideoTracks()[0];
   videoTrack.enabled = !videoTrack.enabled;
@@ -107,7 +140,6 @@ document.querySelector('#camera-btn')?.addEventListener('click', () => {
   btn.style.backgroundColor = videoTrack.enabled ? "#2196F3" : "#f44336";
 });
 
-// 背景画像アップロード
 bgInput.addEventListener('change', (e) => {
   const file = (e.target as HTMLInputElement).files?.[0];
   if (!file) return;
@@ -120,10 +152,10 @@ bgInput.addEventListener('change', (e) => {
   reader.readAsDataURL(file);
 });
 
-// 退出・背景・接続の処理（前回の機能を維持）
 document.querySelector('#hangup-btn')?.addEventListener('click', () => {
   activeCalls.forEach(call => call.close());
   localStream?.getTracks().forEach(track => track.stop());
+  screenStream?.getTracks().forEach(track => track.stop());
   window.location.reload();
 });
 
