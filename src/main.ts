@@ -103,36 +103,30 @@ faceMesh.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // --- 1. 左右反転を適用 ---
   ctx.translate(canvas.width, 0);
   ctx.scale(-1, 1);
 
-  // --- 2. 背景の描画 (一番下に配置) ---
   if (backgroundImg) {
     ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
   }
 
-  // --- 3. カメラ映像の描画 ---
   if (results.image) {
     ctx.save();
-    // 背景画像がある、もしくはアバターモードの場合はカメラ映像を透かす
     if (isAvatarMode) {
-      ctx.globalAlpha = 0.2; // アバター時はカメラをほぼ透明に
+      ctx.globalAlpha = 0.2; 
     } else if (backgroundImg) {
-      ctx.globalAlpha = 0.5; // 背景合成時はカメラを半透明に
+      ctx.globalAlpha = 0.5; 
     }
     ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
     ctx.restore();
   }
 
-  // --- 4. 顔認識に関連するパーツの描画 ---
   if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
     const landmarks = results.multiFaceLandmarks[0];
     const centerX = landmarks[1].x * canvas.width;
     const centerY = landmarks[1].y * canvas.height;
     const radius = ((landmarks[454].x - landmarks[234].x) * canvas.width * 1.8) / 2;
 
-    // アバター表示
     if (isAvatarMode && imgClose && imgOpen) {
       const isMouthOpen = Math.abs(landmarks[13].y - landmarks[14].y) > 0.025;
       const isBlinking = Math.abs(landmarks[159].y - landmarks[145].y) < 0.012;
@@ -150,12 +144,11 @@ faceMesh.onResults((results) => {
       ctx.restore();
     }
 
-    // リアクション（反転を考慮して描画）
     const now = Date.now();
     reactions = reactions.filter(r => now - r.time < 2000);
     reactions.forEach((r, i) => {
       ctx.save();
-      ctx.scale(-1, 1); // テキストが反転しないように再反転
+      ctx.scale(-1, 1); 
       ctx.font = "40px serif";
       ctx.textAlign = "center";
       ctx.fillText(r.emoji, -centerX, centerY - radius - 20 - (i * 40));
@@ -165,7 +158,6 @@ faceMesh.onResults((results) => {
   ctx.restore();
 });
 
-// カメラ開始処理
 navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true }).then(stream => {
   localStream = stream;
   video.srcObject = stream;
@@ -176,7 +168,6 @@ navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio:
   };
 });
 
-// --- 以下、通信とボタン操作 (省略なし) ---
 const peer = new Peer();
 peer.on('open', (id) => document.querySelector<HTMLElement>('#status')!.innerText = `あなたのID: ${id}`);
 
@@ -193,6 +184,26 @@ const handleData = (conn: DataConnection) => {
   });
 };
 
+// 重複作成を防ぐための共通関数
+function setupRemoteVideo(call: any) {
+  call.on('stream', (stream: MediaStream) => {
+    const existingVideo = document.getElementById(`video-${call.peer}`) as HTMLVideoElement;
+    if (existingVideo) {
+      existingVideo.srcObject = stream;
+      return;
+    }
+
+    const remoteVideo = document.createElement('video');
+    remoteVideo.id = `video-${call.peer}`; 
+    remoteVideo.style.width = "320px"; 
+    remoteVideo.style.borderRadius = "15px";
+    remoteVideo.autoplay = true; 
+    remoteVideo.playsInline = true;
+    remoteVideo.srcObject = stream;
+    document.querySelector('#video-grid')!.appendChild(remoteVideo);
+  });
+}
+
 peer.on('connection', (conn) => { connections.push(conn); handleData(conn); });
 
 peer.on('call', (call) => {
@@ -204,22 +215,16 @@ peer.on('call', (call) => {
 
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const id = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
-  if(!id) return;
+  if(!id || id === peer.id) return;
+  
   const conn = peer.connect(id);
   connections.push(conn);
   handleData(conn);
+  
   const stream = canvas.captureStream(25);
   localStream.getAudioTracks().forEach(t => stream.addTrack(t));
   setupRemoteVideo(peer.call(id, stream));
 });
-
-function setupRemoteVideo(call: any) {
-  call.on('stream', (s: MediaStream) => {
-    const v = document.createElement('video');
-    v.style.width = "320px"; v.style.borderRadius = "15px"; v.autoplay = true; v.srcObject = s;
-    document.querySelector('#video-grid')!.appendChild(v);
-  });
-}
 
 document.querySelector('#send-btn')?.addEventListener('click', () => {
   if (chatInput.value) {
