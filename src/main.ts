@@ -56,7 +56,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// --- グローバル変数 ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
@@ -75,12 +74,10 @@ let localStream: MediaStream;
 let connections: DataConnection[] = []; 
 let reactions: { emoji: string, time: number }[] = [];
 
-// 背景削除用の裏キャンバス
 const offCanvas = document.createElement('canvas');
 offCanvas.width = 480; offCanvas.height = 360;
 const offCtx = offCanvas.getContext('2d')!;
 
-// --- 画像アップロード設定 ---
 const setupImageUpload = (id: string, callback: (img: HTMLImageElement) => void) => {
   document.querySelector<HTMLInputElement>(`#${id}`)?.addEventListener('change', (e) => {
     const file = (e.target as HTMLInputElement).files?.[0];
@@ -97,7 +94,6 @@ setupImageUpload('avatar-open', (img) => imgOpen = img);
 setupImageUpload('avatar-blink', (img) => imgBlink = img);
 setupImageUpload('bg-upload', (img) => backgroundImg = img);
 
-// --- AI設定 ---
 const selfieSegmentation = new SelfieSegmentation({
   locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`
 });
@@ -116,15 +112,16 @@ selfieSegmentation.onResults((results) => {
 faceMesh.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.translate(canvas.width, 0);
-  ctx.scale(-1, 1);
 
-  // 1. 背景描画
+  // 1. 背景描画 (反転させない)
   if (backgroundImg) {
     ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
   }
 
-  // 2. 人物描画（AI切り抜き）
+  // 2. 人物・アバター描画設定 (ここから反転)
+  ctx.translate(canvas.width, 0);
+  ctx.scale(-1, 1);
+
   if (results.image) {
     if (currentMask && backgroundImg && !isAvatarMode) {
       offCtx.save();
@@ -142,7 +139,6 @@ faceMesh.onResults((results) => {
     }
   }
 
-  // 3. アバターとリアクション
   if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
     const landmarks = results.multiFaceLandmarks[0];
     const centerX = landmarks[1].x * canvas.width;
@@ -164,7 +160,9 @@ faceMesh.onResults((results) => {
     const now = Date.now();
     reactions = reactions.filter(r => now - r.time < 2000);
     reactions.forEach((r, i) => {
-      ctx.save(); ctx.scale(-1, 1); ctx.font = "40px serif"; ctx.textAlign = "center";
+      ctx.save(); 
+      ctx.scale(-1, 1); // 絵文字は反転させない
+      ctx.font = "40px serif"; ctx.textAlign = "center";
       ctx.fillText(r.emoji, -centerX, centerY - radius - 20 - (i * 40));
       ctx.restore();
     });
@@ -172,7 +170,6 @@ faceMesh.onResults((results) => {
   ctx.restore();
 });
 
-// --- 通信とコントロール ---
 function setupRemoteVideo(call: any) {
   call.on('stream', (stream: MediaStream) => {
     const existing = document.getElementById(`video-${call.peer}`) as HTMLVideoElement;
