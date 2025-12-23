@@ -1,16 +1,15 @@
 import './style.css'
 import { Peer, DataConnection } from 'peerjs'
 import { FaceMesh } from '@mediapipe/face_mesh'
+import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; overflow: hidden; background: #f0f2f5;">
     <div style="flex: 1; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto;">
       <h1 style="color: #333; margin-bottom: 20px;">バーチャル会議室</h1>
-      
       <div id="video-grid" style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; padding: 10px;">
         <canvas id="local-canvas" width="480" height="360" style="width: 320px; border: 3px solid #646cff; border-radius: 15px; background: #222; box-shadow: 0 8px 16px rgba(0,0,0,0.2);"></canvas>
       </div>
-      
       <div class="card" style="width: 100%; max-width: 500px; margin-top: 20px; padding: 20px; border-radius: 16px; background: #fff; box-shadow: 0 10px 25px rgba(0,0,0,0.1);">
         <div style="display: flex; gap: 8px; justify-content: center; margin-bottom: 15px; flex-wrap: wrap;">
           <button id="camera-btn" style="background-color: #2196F3; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">📹 カメラ: ON</button>
@@ -18,14 +17,12 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <button id="avatar-mode-btn" style="background-color: #555; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">👤 アバター: OFF</button>
           <button id="hangup-btn" style="background-color: #f44336; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">退出</button>
         </div>
-
         <div style="display: flex; gap: 10px; justify-content: center; margin-bottom: 15px; background: #eee; padding: 10px; border-radius: 10px;">
           <button class="react-btn" data-emoji="👏" style="font-size: 20px; cursor: pointer; background: none; border: none;">👏</button>
           <button class="react-btn" data-emoji="❤️" style="font-size: 20px; cursor: pointer; background: none; border: none;">❤️</button>
           <button class="react-btn" data-emoji="😮" style="font-size: 20px; cursor: pointer; background: none; border: none;">😮</button>
           <button class="react-btn" data-emoji="🔥" style="font-size: 20px; cursor: pointer; background: none; border: none;">🔥</button>
         </div>
-
         <div style="background: #f8f9fa; padding: 15px; border-radius: 12px; text-align: left; margin-bottom: 15px;">
           <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景画像を設定</label>
           <input type="file" id="bg-upload" accept="image/*" style="width: 100%; font-size: 10px; margin-top: 5px;">
@@ -37,7 +34,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
             <input type="file" id="avatar-blink" accept="image/*" title="まばたき" style="font-size: 9px; width: 33%;">
           </div>
         </div>
-
         <div style="background: #f8f9fa; padding: 15px; border-radius: 12px; text-align: left;">
           <input type="text" id="user-name-input" placeholder="名前" value="User Name" style="width: 100%; padding: 8px; margin-bottom: 10px; border-radius: 5px; border: 1px solid #ddd;">
           <div style="display: flex; gap: 10px;">
@@ -48,7 +44,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <p id="status" style="font-size: 12px; color: #999; margin-top: 10px;">ID: 取得中...</p>
       </div>
     </div>
-
     <div style="width: 300px; background: #fff; border-left: 1px solid #ddd; display: flex; flex-direction: column;">
       <div style="padding: 15px; background: #646cff; color: white; font-weight: bold;">チャット</div>
       <div id="chat-box" style="flex: 1; overflow-y: auto; padding: 10px; font-size: 14px; display: flex; flex-direction: column; gap: 8px;"></div>
@@ -61,6 +56,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
+// --- グローバル変数 ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
@@ -79,6 +75,11 @@ let localStream: MediaStream;
 let connections: DataConnection[] = []; 
 let reactions: { emoji: string, time: number }[] = [];
 
+// 背景削除用の裏キャンバス
+const offCanvas = document.createElement('canvas');
+offCanvas.width = 480; offCanvas.height = 360;
+const offCtx = offCanvas.getContext('2d')!;
+
 // --- 画像アップロード設定 ---
 const setupImageUpload = (id: string, callback: (img: HTMLImageElement) => void) => {
   document.querySelector<HTMLInputElement>(`#${id}`)?.addEventListener('change', (e) => {
@@ -96,31 +97,52 @@ setupImageUpload('avatar-open', (img) => imgOpen = img);
 setupImageUpload('avatar-blink', (img) => imgBlink = img);
 setupImageUpload('bg-upload', (img) => backgroundImg = img);
 
-const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
+// --- AI設定 ---
+const selfieSegmentation = new SelfieSegmentation({
+  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`
+});
+selfieSegmentation.setOptions({ modelSelection: 1 });
+
+const faceMesh = new FaceMesh({
+  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+});
 faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+
+let currentMask: any = null;
+selfieSegmentation.onResults((results) => {
+  currentMask = results.segmentationMask;
+});
 
 faceMesh.onResults((results) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-
   ctx.translate(canvas.width, 0);
   ctx.scale(-1, 1);
 
+  // 1. 背景描画
   if (backgroundImg) {
     ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
   }
 
+  // 2. 人物描画（AI切り抜き）
   if (results.image) {
-    ctx.save();
-    if (isAvatarMode) {
-      ctx.globalAlpha = 0.2; 
-    } else if (backgroundImg) {
-      ctx.globalAlpha = 0.5; 
+    if (currentMask && backgroundImg && !isAvatarMode) {
+      offCtx.save();
+      offCtx.clearRect(0, 0, offCanvas.width, offCanvas.height);
+      offCtx.drawImage(currentMask, 0, 0, offCanvas.width, offCanvas.height);
+      offCtx.globalCompositeOperation = 'source-in';
+      offCtx.drawImage(results.image, 0, 0, offCanvas.width, offCanvas.height);
+      offCtx.restore();
+      ctx.drawImage(offCanvas, 0, 0, canvas.width, canvas.height);
+    } else {
+      ctx.save();
+      if (isAvatarMode) ctx.globalAlpha = 0.2;
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+      ctx.restore();
     }
-    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-    ctx.restore();
   }
 
+  // 3. アバターとリアクション
   if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
     const landmarks = results.multiFaceLandmarks[0];
     const centerX = landmarks[1].x * canvas.width;
@@ -130,16 +152,11 @@ faceMesh.onResults((results) => {
     if (isAvatarMode && imgClose && imgOpen) {
       const isMouthOpen = Math.abs(landmarks[13].y - landmarks[14].y) > 0.025;
       const isBlinking = Math.abs(landmarks[159].y - landmarks[145].y) < 0.012;
-
       ctx.save();
-      ctx.beginPath(); 
-      ctx.arc(centerX, centerY, radius, 0, Math.PI * 2); 
-      ctx.clip();
-      
+      ctx.beginPath(); ctx.arc(centerX, centerY, radius, 0, Math.PI * 2); ctx.clip();
       let targetImg = imgClose;
       if (isBlinking && imgBlink) targetImg = imgBlink;
       else if (isMouthOpen && isMicOn) targetImg = imgOpen;
-      
       ctx.drawImage(targetImg, centerX - radius, centerY - radius, radius * 2, radius * 2);
       ctx.restore();
     }
@@ -147,10 +164,7 @@ faceMesh.onResults((results) => {
     const now = Date.now();
     reactions = reactions.filter(r => now - r.time < 2000);
     reactions.forEach((r, i) => {
-      ctx.save();
-      ctx.scale(-1, 1); 
-      ctx.font = "40px serif";
-      ctx.textAlign = "center";
+      ctx.save(); ctx.scale(-1, 1); ctx.font = "40px serif"; ctx.textAlign = "center";
       ctx.fillText(r.emoji, -centerX, centerY - radius - 20 - (i * 40));
       ctx.restore();
     });
@@ -158,12 +172,28 @@ faceMesh.onResults((results) => {
   ctx.restore();
 });
 
+// --- 通信とコントロール ---
+function setupRemoteVideo(call: any) {
+  call.on('stream', (stream: MediaStream) => {
+    const existing = document.getElementById(`video-${call.peer}`) as HTMLVideoElement;
+    if (existing) { existing.srcObject = stream; return; }
+    const v = document.createElement('video');
+    v.id = `video-${call.peer}`; v.style.width = "320px"; v.style.borderRadius = "15px";
+    v.autoplay = true; v.playsInline = true; v.srcObject = stream;
+    document.querySelector('#video-grid')!.appendChild(v);
+  });
+}
+
 navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true }).then(stream => {
   localStream = stream;
   video.srcObject = stream;
   video.onloadedmetadata = () => { 
     video.play(); 
-    const predict = async () => { await faceMesh.send({ image: video }); requestAnimationFrame(predict); }; 
+    const predict = async () => { 
+      await selfieSegmentation.send({ image: video });
+      await faceMesh.send({ image: video });
+      requestAnimationFrame(predict); 
+    }; 
     predict(); 
   };
 });
@@ -184,28 +214,7 @@ const handleData = (conn: DataConnection) => {
   });
 };
 
-// 重複作成を防ぐための共通関数
-function setupRemoteVideo(call: any) {
-  call.on('stream', (stream: MediaStream) => {
-    const existingVideo = document.getElementById(`video-${call.peer}`) as HTMLVideoElement;
-    if (existingVideo) {
-      existingVideo.srcObject = stream;
-      return;
-    }
-
-    const remoteVideo = document.createElement('video');
-    remoteVideo.id = `video-${call.peer}`; 
-    remoteVideo.style.width = "320px"; 
-    remoteVideo.style.borderRadius = "15px";
-    remoteVideo.autoplay = true; 
-    remoteVideo.playsInline = true;
-    remoteVideo.srcObject = stream;
-    document.querySelector('#video-grid')!.appendChild(remoteVideo);
-  });
-}
-
 peer.on('connection', (conn) => { connections.push(conn); handleData(conn); });
-
 peer.on('call', (call) => {
   const stream = canvas.captureStream(25);
   localStream.getAudioTracks().forEach(t => stream.addTrack(t));
@@ -216,11 +225,9 @@ peer.on('call', (call) => {
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const id = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
   if(!id || id === peer.id) return;
-  
   const conn = peer.connect(id);
   connections.push(conn);
   handleData(conn);
-  
   const stream = canvas.captureStream(25);
   localStream.getAudioTracks().forEach(t => stream.addTrack(t));
   setupRemoteVideo(peer.call(id, stream));
@@ -246,24 +253,18 @@ document.querySelectorAll('.react-btn').forEach(b => {
 document.querySelector('#camera-btn')?.addEventListener('click', () => {
   isCameraOn = !isCameraOn;
   localStream.getVideoTracks()[0].enabled = isCameraOn;
-  const btn = document.querySelector<HTMLButtonElement>('#camera-btn')!;
-  btn.innerText = isCameraOn ? "📹 カメラ: ON" : "📹 カメラ: OFF";
-  btn.style.backgroundColor = isCameraOn ? "#2196F3" : "#f44336";
+  document.querySelector<HTMLButtonElement>('#camera-btn')!.innerText = isCameraOn ? "📹 カメラ: ON" : "📹 カメラ: OFF";
 });
 
 document.querySelector('#mic-btn')?.addEventListener('click', () => {
   isMicOn = !isMicOn;
   localStream.getAudioTracks()[0].enabled = isMicOn;
-  const btn = document.querySelector<HTMLButtonElement>('#mic-btn')!;
-  btn.innerText = isMicOn ? "🎤 マイク: ON" : "🎤 マイク: OFF";
-  btn.style.backgroundColor = isMicOn ? "#4CAF50" : "#f44336";
+  document.querySelector<HTMLButtonElement>('#mic-btn')!.innerText = isMicOn ? "🎤 マイク: ON" : "🎤 マイク: OFF";
 });
 
 document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
   isAvatarMode = !isAvatarMode;
-  const btn = document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!;
-  btn.innerText = isAvatarMode ? "👤 アバター: ON" : "👤 アバター: OFF";
-  btn.style.backgroundColor = isAvatarMode ? "#FFC107" : "#555";
+  document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!.innerText = isAvatarMode ? "👤 アバター: ON" : "👤 アバター: OFF";
 });
 
 document.querySelector('#hangup-btn')?.addEventListener('click', () => window.location.reload());
