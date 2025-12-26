@@ -14,16 +14,24 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <div style="display: flex; gap: 8px; justify-content: center; margin-bottom: 15px; flex-wrap: wrap;">
           <button id="camera-btn" style="background-color: #2196F3; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">📹 カメラ: ON</button>
           <button id="mic-btn" style="background-color: #4CAF50; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">🎤 マイク: ON</button>
-          <button id="voice-btn" style="background-color: #9C27B0; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">🔊 ボイス: 通常</button>
+          <button id="voice-btn" style="background-color: #9C27B0; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">🔊 ボイス: OFF</button>
           <button id="avatar-mode-btn" style="background-color: #555; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">👤 アバター: OFF</button>
           <button id="hangup-btn" style="background-color: #f44336; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">退出</button>
         </div>
+
+        <div style="margin-bottom: 15px; background: #f3e5f5; padding: 10px; border-radius: 10px; display: flex; align-items: center; gap: 10px;">
+          <label style="font-size: 12px; font-weight: bold; color: #7b1fa2;">声の高さ:</label>
+          <input type="range" id="pitch-slider" min="0.5" max="2.0" step="0.1" value="1.0" style="flex: 1; cursor: pointer;">
+          <span id="pitch-display" style="font-size: 12px; font-weight: bold; min-width: 25px;">1.0</span>
+        </div>
+
         <div style="display: flex; gap: 10px; justify-content: center; margin-bottom: 15px; background: #eee; padding: 10px; border-radius: 10px;">
           <button class="react-btn" data-emoji="👏" style="font-size: 20px; cursor: pointer; background: none; border: none;">👏</button>
           <button class="react-btn" data-emoji="❤️" style="font-size: 20px; cursor: pointer; background: none; border: none;">❤️</button>
           <button class="react-btn" data-emoji="😮" style="font-size: 20px; cursor: pointer; background: none; border: none;">😮</button>
           <button class="react-btn" data-emoji="🔥" style="font-size: 20px; cursor: pointer; background: none; border: none;">🔥</button>
         </div>
+
         <div style="background: #f8f9fa; padding: 15px; border-radius: 12px; text-align: left; margin-bottom: 15px;">
           <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景画像を設定</label>
           <input type="file" id="bg-upload" accept="image/*" style="width: 100%; font-size: 10px; margin-top: 5px;">
@@ -35,6 +43,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
             <input type="file" id="avatar-blink" accept="image/*" title="まばたき" style="font-size: 9px; width: 33%;">
           </div>
         </div>
+
         <div style="background: #f8f9fa; padding: 15px; border-radius: 12px; text-align: left;">
           <input type="text" id="user-name-input" placeholder="名前" value="User Name" style="width: 100%; padding: 8px; margin-bottom: 10px; border-radius: 5px; border: 1px solid #ddd;">
           <div style="display: flex; gap: 10px;">
@@ -65,23 +74,41 @@ const nameInput = document.querySelector<HTMLInputElement>('#user-name-input')!;
 const chatBox = document.querySelector<HTMLDivElement>('#chat-box')!;
 const chatInput = document.querySelector<HTMLInputElement>('#chat-input')!;
 const statusEl = document.querySelector<HTMLElement>('#status')!;
+const pitchSlider = document.querySelector<HTMLInputElement>('#pitch-slider')!;
+const pitchDisplay = document.querySelector<HTMLElement>('#pitch-display')!;
 
 let isCameraOn = true, isMicOn = true, isVoiceEffect = false, isAvatarMode = false;
 let imgClose: HTMLImageElement | null = null, imgOpen: HTMLImageElement | null = null, imgBlink: HTMLImageElement | null = null, backgroundImg: HTMLImageElement | null = null;
 let localStream: MediaStream, processedStream: MediaStream;
 let connections: DataConnection[] = [], reactions: { emoji: string, time: number }[] = [];
 
-// --- ボイスチェンジャー設定 ---
+// --- ボイスチェンジャー設定 (Web Audio API) ---
 let audioCtx: AudioContext, pitchShifter: DelayNode;
 function setupAudioEffect(stream: MediaStream) {
   audioCtx = new AudioContext();
   const source = audioCtx.createMediaStreamSource(stream);
   const dest = audioCtx.createMediaStreamDestination();
+  
+  // 簡易ピッチシフト用のディレイ変調
   pitchShifter = audioCtx.createDelay();
   pitchShifter.delayTime.value = 0; 
+  
   source.connect(pitchShifter);
   pitchShifter.connect(dest);
   return dest.stream.getAudioTracks()[0];
+}
+
+// 声のピッチを計算して反映させる関数
+function updateVoicePitch() {
+  if (!pitchShifter) return;
+  if (isVoiceEffect) {
+    const pitch = parseFloat(pitchSlider.value);
+    // スライダーの値(0.5-2.0)をディレイ時間(0.01-0.03)に変換してピッチ感を変える
+    const targetDelay = 0.01 + (2.0 - pitch) * 0.015;
+    pitchShifter.delayTime.setTargetAtTime(targetDelay, audioCtx.currentTime, 0.1);
+  } else {
+    pitchShifter.delayTime.setTargetAtTime(0, audioCtx.currentTime, 0.1);
+  }
 }
 
 // --- 背景・人物描画処理 ---
@@ -208,10 +235,17 @@ document.querySelector('#send-btn')?.addEventListener('click', () => {
   }
 });
 
+// ボイスチェンジのON/OFF
 document.querySelector('#voice-btn')?.addEventListener('click', () => {
   isVoiceEffect = !isVoiceEffect;
-  pitchShifter.delayTime.value = isVoiceEffect ? 0.015 : 0; // 0.015で高い声
-  document.querySelector<HTMLButtonElement>('#voice-btn')!.innerText = isVoiceEffect ? "🔊 ボイス: 高音" : "🔊 ボイス: 通常";
+  updateVoicePitch();
+  document.querySelector<HTMLButtonElement>('#voice-btn')!.innerText = isVoiceEffect ? "🔊 ボイス: ON" : "🔊 ボイス: OFF";
+});
+
+// ピッチスライダーを動かした時
+pitchSlider.addEventListener('input', () => {
+  pitchDisplay.innerText = pitchSlider.value;
+  updateVoicePitch();
 });
 
 document.querySelectorAll('.react-btn').forEach(b => {
