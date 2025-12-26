@@ -42,7 +42,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
              <button id="connect-btn" style="flex: 1; background-color: #646cff; color: white; border-radius: 5px; border: none; cursor: pointer;">接続</button>
           </div>
         </div>
-        <p id="status" style="font-size: 12px; color: #999; margin-top: 10px;">ID: 取得中...</p>
+        <p id="status" style="font-size: 12px; color: #d32f2f; font-weight: bold; margin-top: 10px;">ID: 取得中...</p>
       </div>
     </div>
     <div style="width: 300px; background: #fff; border-left: 1px solid #ddd; display: flex; flex-direction: column;">
@@ -64,100 +64,67 @@ const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const nameInput = document.querySelector<HTMLInputElement>('#user-name-input')!;
 const chatBox = document.querySelector<HTMLDivElement>('#chat-box')!;
 const chatInput = document.querySelector<HTMLInputElement>('#chat-input')!;
+const statusEl = document.querySelector<HTMLElement>('#status')!;
 
-let isCameraOn = true;
-let isMicOn = true;
-let isVoiceEffect = false;
-let isAvatarMode = false;
-let imgClose: HTMLImageElement | null = null;
-let imgOpen: HTMLImageElement | null = null;
-let imgBlink: HTMLImageElement | null = null;
-let backgroundImg: HTMLImageElement | null = null;
-let localStream: MediaStream;
-let processedStream: MediaStream; // 加工後のストリーム
-let connections: DataConnection[] = []; 
-let reactions: { emoji: string, time: number }[] = [];
+let isCameraOn = true, isMicOn = true, isVoiceEffect = false, isAvatarMode = false;
+let imgClose: HTMLImageElement | null = null, imgOpen: HTMLImageElement | null = null, imgBlink: HTMLImageElement | null = null, backgroundImg: HTMLImageElement | null = null;
+let localStream: MediaStream, processedStream: MediaStream;
+let connections: DataConnection[] = [], reactions: { emoji: string, time: number }[] = [];
 
 // --- ボイスチェンジャー設定 ---
-let audioCtx: AudioContext;
-let audioSource: MediaStreamAudioSourceNode;
-let pitchShifter: DelayNode;
-let streamDest: MediaStreamAudioDestinationNode;
-
+let audioCtx: AudioContext, pitchShifter: DelayNode;
 function setupAudioEffect(stream: MediaStream) {
   audioCtx = new AudioContext();
-  audioSource = audioCtx.createMediaStreamSource(stream);
-  streamDest = audioCtx.createMediaStreamDestination();
-  
-  // 簡易ピッチシフト用のディレイ（声を高くする）
+  const source = audioCtx.createMediaStreamSource(stream);
+  const dest = audioCtx.createMediaStreamDestination();
   pitchShifter = audioCtx.createDelay();
   pitchShifter.delayTime.value = 0; 
-
-  const gain = audioCtx.createGain();
-  
-  audioSource.connect(pitchShifter);
-  pitchShifter.connect(gain);
-  gain.connect(streamDest);
-
-  return streamDest.stream.getAudioTracks()[0];
+  source.connect(pitchShifter);
+  pitchShifter.connect(dest);
+  return dest.stream.getAudioTracks()[0];
 }
 
-// --- 画像アップロード、AI設定、描画処理などは以前と同じ ---
+// --- 背景・人物描画処理 ---
 const offCanvas = document.createElement('canvas');
 offCanvas.width = 480; offCanvas.height = 360;
 const offCtx = offCanvas.getContext('2d')!;
 
-const setupImageUpload = (id: string, callback: (img: HTMLImageElement) => void) => {
+const setupImageUpload = (id: string, cb: (img: HTMLImageElement) => void) => {
   document.querySelector<HTMLInputElement>(`#${id}`)?.addEventListener('change', (e) => {
     const file = (e.target as HTMLInputElement).files?.[0];
-    if (file) {
-      const img = new Image();
-      img.onload = () => callback(img);
-      img.src = URL.createObjectURL(file);
-    }
+    if (file) { const img = new Image(); img.onload = () => cb(img); img.src = URL.createObjectURL(file); }
   });
 };
-
 setupImageUpload('avatar-close', (img) => imgClose = img);
 setupImageUpload('avatar-open', (img) => imgOpen = img);
 setupImageUpload('avatar-blink', (img) => imgBlink = img);
 setupImageUpload('bg-upload', (img) => backgroundImg = img);
 
-const selfieSegmentation = new SelfieSegmentation({
-  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`
-});
+const selfieSegmentation = new SelfieSegmentation({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}` });
 selfieSegmentation.setOptions({ modelSelection: 1 });
-
-const faceMesh = new FaceMesh({
-  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-});
-faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
+faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5 });
 
 let currentMask: any = null;
-selfieSegmentation.onResults((results) => { currentMask = results.segmentationMask; });
+selfieSegmentation.onResults((res) => { currentMask = res.segmentationMask; });
 
-faceMesh.onResults((results) => {
-  ctx.save();
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+faceMesh.onResults((res) => {
+  ctx.save(); ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (backgroundImg) ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
   ctx.translate(canvas.width, 0); ctx.scale(-1, 1);
-  if (results.image) {
+  if (res.image) {
     if (currentMask && backgroundImg && !isAvatarMode) {
       offCtx.save(); offCtx.clearRect(0, 0, offCanvas.width, offCanvas.height);
       offCtx.drawImage(currentMask, 0, 0, offCanvas.width, offCanvas.height);
-      offCtx.globalCompositeOperation = 'source-in';
-      offCtx.drawImage(results.image, 0, 0, offCanvas.width, offCanvas.height);
-      offCtx.restore();
+      offCtx.globalCompositeOperation = 'source-in'; offCtx.drawImage(res.image, 0, 0, offCanvas.width, offCanvas.height); offCtx.restore();
       ctx.drawImage(offCanvas, 0, 0, canvas.width, canvas.height);
     } else {
-      ctx.save(); if (isAvatarMode) ctx.globalAlpha = 0.2;
-      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height); ctx.restore();
+      ctx.save(); if (isAvatarMode) ctx.globalAlpha = 0.2; ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height); ctx.restore();
     }
   }
-  if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-    const landmarks = results.multiFaceLandmarks[0];
-    const centerX = landmarks[1].x * canvas.width;
-    const centerY = landmarks[1].y * canvas.height;
+  if (res.multiFaceLandmarks && res.multiFaceLandmarks.length > 0) {
+    const landmarks = res.multiFaceLandmarks[0];
+    const centerX = landmarks[1].x * canvas.width, centerY = landmarks[1].y * canvas.height;
     const radius = ((landmarks[454].x - landmarks[234].x) * canvas.width * 1.8) / 2;
     if (isAvatarMode && imgClose && imgOpen) {
       const isMouthOpen = Math.abs(landmarks[13].y - landmarks[14].y) > 0.025;
@@ -167,8 +134,7 @@ faceMesh.onResults((results) => {
       if (isBlinking && imgBlink) targetImg = imgBlink; else if (isMouthOpen && isMicOn) targetImg = imgOpen;
       ctx.drawImage(targetImg, centerX - radius, centerY - radius, radius * 2, radius * 2); ctx.restore();
     }
-    const now = Date.now();
-    reactions = reactions.filter(r => now - r.time < 2000);
+    const now = Date.now(); reactions = reactions.filter(r => now - r.time < 2000);
     reactions.forEach((r, i) => {
       ctx.save(); ctx.scale(-1, 1); ctx.font = "40px serif"; ctx.textAlign = "center";
       ctx.fillText(r.emoji, -centerX, centerY - radius - 20 - (i * 40)); ctx.restore();
@@ -177,86 +143,74 @@ faceMesh.onResults((results) => {
   ctx.restore();
 });
 
-// --- 通信と退出処理の改善 ---
+// --- 通信コア機能 ---
+const updateStatus = (msg: string) => { statusEl.innerText = msg; console.log(msg); };
+
 function setupRemoteVideo(call: any) {
   call.on('stream', (stream: MediaStream) => {
     const id = `video-${call.peer}`;
     if (document.getElementById(id)) return;
     const v = document.createElement('video');
-    v.id = id; v.style.width = "320px"; v.style.borderRadius = "15px";
-    v.autoplay = true; v.playsInline = true; v.srcObject = stream;
+    v.id = id; v.style.width = "320px"; v.style.borderRadius = "15px"; v.autoplay = true; v.playsInline = true; v.srcObject = stream;
     document.querySelector('#video-grid')!.appendChild(v);
+    updateStatus("接続完了！");
   });
-
-  // 💡 相手が切断したときにビデオを削除
-  call.on('close', () => {
-    document.getElementById(`video-${call.peer}`)?.remove();
-  });
+  call.on('close', () => document.getElementById(`video-${call.peer}`)?.remove());
 }
 
+const handleData = (conn: DataConnection) => {
+  conn.on('data', (data: any) => {
+    if (data.type === 'chat') {
+      const el = document.createElement('div'); el.innerText = `${data.name}: ${data.content}`;
+      el.style.background = "#f0f0f0"; el.style.padding = "5px 10px"; el.style.borderRadius = "5px";
+      chatBox.appendChild(el); chatBox.scrollTop = chatBox.scrollHeight;
+    }
+    if (data.type === 'reaction') reactions.push({ emoji: data.content, time: Date.now() });
+  });
+  conn.on('close', () => document.getElementById(`video-${conn.peer}`)?.remove());
+};
+
+// --- 初期化 ---
 navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true }).then(stream => {
   localStream = stream;
   const audioTrack = setupAudioEffect(stream);
   processedStream = canvas.captureStream(25);
   processedStream.addTrack(audioTrack);
-
   video.srcObject = stream;
-  video.onloadedmetadata = () => { 
-    video.play(); 
-    const predict = async () => { 
-      await selfieSegmentation.send({ image: video }); 
-      await faceMesh.send({ image: video }); 
-      requestAnimationFrame(predict); 
-    }; 
+  video.onloadedmetadata = () => { video.play(); 
+    const predict = async () => { await selfieSegmentation.send({ image: video }); await faceMesh.send({ image: video }); requestAnimationFrame(predict); };
     predict(); 
   };
 });
 
 const peer = new Peer();
-peer.on('open', (id) => document.querySelector<HTMLElement>('#status')!.innerText = `あなたのID: ${id}`);
+peer.on('open', (id) => updateStatus(`あなたのID: ${id}`));
+peer.on('connection', (conn) => { updateStatus(`接続中...`); connections.push(conn); handleData(conn); });
+peer.on('call', (call) => { updateStatus(`着信中...`); call.answer(processedStream); setupRemoteVideo(call); });
 
-const handleData = (conn: DataConnection) => {
-  conn.on('data', (data: any) => {
-    if (data.type === 'chat') {
-      const el = document.createElement('div');
-      el.innerText = `${data.name}: ${data.content}`; el.style.background = "#f0f0f0"; el.style.padding = "5px 10px"; el.style.borderRadius = "5px";
-      chatBox.appendChild(el); chatBox.scrollTop = chatBox.scrollHeight;
-    }
-    if (data.type === 'reaction') reactions.push({ emoji: data.content, time: Date.now() });
-  });
-  // 💡 データ接続が切れたときもビデオを消す
-  conn.on('close', () => {
-    document.getElementById(`video-${conn.peer}`)?.remove();
-  });
-};
-
-peer.on('connection', (conn) => { connections.push(conn); handleData(conn); });
-peer.on('call', (call) => { call.answer(processedStream); setupRemoteVideo(call); });
-
+// --- ボタンイベント ---
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
-  const id = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
+  const id = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value.trim();
   if(!id || id === peer.id) return;
+  updateStatus("接続を試みています...");
   const conn = peer.connect(id);
   connections.push(conn); handleData(conn);
   setupRemoteVideo(peer.call(id, processedStream));
 });
 
-// --- ボタン操作 ---
 document.querySelector('#send-btn')?.addEventListener('click', () => {
   if (chatInput.value) {
     const msg = { type: 'chat', name: nameInput.value, content: chatInput.value };
     connections.forEach(c => c.send(msg));
-    const el = document.createElement('div');
-    el.innerText = `自分: ${chatInput.value}`; el.style.background = "#e3f2fd"; el.style.padding = "5px 10px"; el.style.borderRadius = "5px";
-    chatBox.appendChild(el); chatBox.scrollTop = chatBox.scrollHeight;
-    chatInput.value = "";
+    const el = document.createElement('div'); el.innerText = `自分: ${chatInput.value}`;
+    el.style.background = "#e3f2fd"; el.style.padding = "5px 10px"; el.style.borderRadius = "5px";
+    chatBox.appendChild(el); chatBox.scrollTop = chatBox.scrollHeight; chatInput.value = "";
   }
 });
 
 document.querySelector('#voice-btn')?.addEventListener('click', () => {
   isVoiceEffect = !isVoiceEffect;
-  // 声を高くするためにディレイ値を微調整（簡易版）
-  pitchShifter.delayTime.value = isVoiceEffect ? 0.01 : 0;
+  pitchShifter.delayTime.value = isVoiceEffect ? 0.015 : 0; // 0.015で高い声
   document.querySelector<HTMLButtonElement>('#voice-btn')!.innerText = isVoiceEffect ? "🔊 ボイス: 高音" : "🔊 ボイス: 通常";
 });
 
@@ -269,14 +223,12 @@ document.querySelectorAll('.react-btn').forEach(b => {
 });
 
 document.querySelector('#camera-btn')?.addEventListener('click', () => {
-  isCameraOn = !isCameraOn;
-  localStream.getVideoTracks()[0].enabled = isCameraOn;
+  isCameraOn = !isCameraOn; localStream.getVideoTracks()[0].enabled = isCameraOn;
   document.querySelector<HTMLButtonElement>('#camera-btn')!.innerText = isCameraOn ? "📹 カメラ: ON" : "📹 カメラ: OFF";
 });
 
 document.querySelector('#mic-btn')?.addEventListener('click', () => {
-  isMicOn = !isMicOn;
-  localStream.getAudioTracks()[0].enabled = isMicOn;
+  isMicOn = !isMicOn; localStream.getAudioTracks()[0].enabled = isMicOn;
   document.querySelector<HTMLButtonElement>('#mic-btn')!.innerText = isMicOn ? "🎤 マイク: ON" : "🎤 マイク: OFF";
 });
 
