@@ -1,5 +1,5 @@
 import './style.css'
-import { Peer, DataConnection, MediaConnection } from 'peerjs'
+import { Peer, DataConnection } from 'peerjs'
 import { FaceMesh } from '@mediapipe/face_mesh'
 import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 
@@ -57,7 +57,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// --- グローバル変数 ---
+// --- グローバル設定 ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
@@ -68,12 +68,9 @@ let isMicOn = true, isAvatarMode = false;
 let imgClose: HTMLImageElement | null = null, imgOpen: HTMLImageElement | null = null, imgBlink: HTMLImageElement | null = null, backgroundImg: HTMLImageElement | null = null;
 let processedStream: MediaStream;
 const connections: Set<DataConnection> = new Set();
-const mediaConnections: Set<MediaConnection> = new Set();
-
-// 💡 ここで reactions を使います！
 let reactions: { emoji: string, time: number }[] = [];
 
-// --- 映像処理 (MediaPipe) ---
+// AI描画エンジン
 const selfie = new SelfieSegmentation({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}` });
 selfie.setOptions({ modelSelection: 1 });
 const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
@@ -83,7 +80,8 @@ let currentMask: any = null;
 selfie.onResults((res) => { currentMask = res.segmentationMask; });
 
 faceMesh.onResults((res) => {
-  ctx.save(); ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (backgroundImg) ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
   ctx.translate(canvas.width, 0); ctx.scale(-1, 1);
   
@@ -95,7 +93,7 @@ faceMesh.onResults((res) => {
       offCtx.globalCompositeOperation = 'source-in'; offCtx.drawImage(res.image, 0, 0, 480, 360);
       ctx.drawImage(offCanvas, 0, 0, canvas.width, canvas.height);
     } else {
-      ctx.save(); if (isAvatarMode) ctx.globalAlpha = 0.2; ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height); ctx.restore();
+      ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
     }
   }
 
@@ -112,12 +110,10 @@ faceMesh.onResults((res) => {
       ctx.drawImage(targetImg, centerX - radius, centerY - radius, radius * 2, radius * 2); ctx.restore();
     }
 
-    // 💡 自分の画面にリアクションを描画！
     const now = Date.now();
-    reactions = reactions.filter(r => now - r.time < 2000); // 2秒経ったら消す
+    reactions = reactions.filter(r => now - r.time < 2000);
     reactions.forEach((r, i) => {
       ctx.save(); ctx.scale(-1, 1); ctx.font = "40px serif"; ctx.textAlign = "center";
-      // 顔の上にふわふわ出す
       ctx.fillText(r.emoji, -centerX, centerY - radius - 20 - (i * 40)); 
       ctx.restore();
     });
@@ -125,7 +121,7 @@ faceMesh.onResults((res) => {
   ctx.restore();
 });
 
-// --- 通信機能 ---
+// 通信処理
 const peer = new Peer();
 peer.on('open', (id) => statusEl.innerText = `あなたのID: ${id}`);
 
@@ -148,32 +144,47 @@ function setupDataConnection(conn: DataConnection) {
       const p = document.createElement('p'); p.innerText = `${data.name}: ${data.content}`;
       chatBox.appendChild(p); chatBox.scrollTop = chatBox.scrollHeight;
     }
-    // 💡 相手からのリアクションを受信した時
-    if (data.type === 'reaction') {
-      reactions.push({ emoji: data.content, time: Date.now() });
-    }
+    if (data.type === 'reaction') reactions.push({ emoji: data.content, time: Date.now() });
   });
-  conn.on('close', () => connections.delete(conn));
 }
 
 peer.on('connection', setupDataConnection);
 peer.on('call', (call) => {
   call.answer(processedStream);
   call.on('stream', (stream) => addRemoteVideo(stream, call.peer));
-  mediaConnections.add(call);
 });
 
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const remoteId = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value.trim();
   if (!remoteId || remoteId === peer.id) return;
-  const conn = peer.connect(remoteId);
-  setupDataConnection(conn);
+  setupDataConnection(peer.connect(remoteId));
   const call = peer.call(remoteId, processedStream);
   call.on('stream', (stream) => addRemoteVideo(stream, remoteId));
-  mediaConnections.add(call);
 });
 
-// チャット送信
+// 起動処理
+navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
+  processedStream = canvas.captureStream(30);
+  stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
+  video.srcObject = stream;
+  video.play();
+  const loop = async () => {
+    await selfie.send({ image: video });
+    await faceMesh.send({ image: video });
+    requestAnimationFrame(loop);
+  };
+  loop();
+});
+
+// イベントリスナー
+document.querySelectorAll('.react-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const emoji = (btn as HTMLElement).dataset.emoji!;
+    reactions.push({ emoji, time: Date.now() });
+    connections.forEach(c => c.send({ type: 'reaction', content: emoji }));
+  });
+});
+
 document.querySelector('#send-btn')?.addEventListener('click', () => {
   const input = (document.querySelector<HTMLInputElement>('#chat-input')!);
   const name = (document.querySelector<HTMLInputElement>('#user-name-input')!).value;
@@ -184,25 +195,6 @@ document.querySelector('#send-btn')?.addEventListener('click', () => {
   chatBox.appendChild(p); input.value = "";
 });
 
-// 💡 リアクションボタンの処理
-document.querySelectorAll('.react-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const emoji = (btn as HTMLElement).dataset.emoji!;
-    reactions.push({ emoji, time: Date.now() }); // 自分の画面に出す
-    connections.forEach(c => c.send({ type: 'reaction', content: emoji })); // 全員に送る
-  });
-});
-
-// --- 初期化 ---
-navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
-  processedStream = canvas.captureStream(30);
-  stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
-  video.srcObject = stream;
-  video.play();
-  setInterval(() => { selfie.send({ image: video }); faceMesh.send({ image: video }); }, 40);
-});
-
-// 画像アップロード設定
 const setImg = (id: string, target: string) => {
   document.querySelector<HTMLInputElement>(`#${id}`)?.addEventListener('change', (e: any) => {
     const f = e.target.files[0]; if(!f) return;
@@ -215,6 +207,16 @@ const setImg = (id: string, target: string) => {
 };
 setImg('avatar-close', 'close'); setImg('avatar-open', 'open'); setImg('avatar-blink', 'blink'); setImg('bg-upload', 'bg');
 
+document.querySelector('#camera-btn')?.addEventListener('click', () => {
+  const track = (video.srcObject as MediaStream).getVideoTracks()[0];
+  track.enabled = !track.enabled;
+  document.querySelector<HTMLButtonElement>('#camera-btn')!.innerText = track.enabled ? "📹 カメラ: ON" : "📹 カメラ: OFF";
+});
+document.querySelector('#mic-btn')?.addEventListener('click', () => {
+  isMicOn = !isMicOn;
+  (video.srcObject as MediaStream).getAudioTracks()[0].enabled = isMicOn;
+  document.querySelector<HTMLButtonElement>('#mic-btn')!.innerText = isMicOn ? "🎤 マイク: ON" : "🎤 マイク: OFF";
+});
 document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
   isAvatarMode = !isAvatarMode;
   document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!.innerText = isAvatarMode ? "👤 アバター: ON" : "👤 アバター: OFF";
