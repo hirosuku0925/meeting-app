@@ -20,7 +20,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         </div>
 
         <div style="margin-bottom: 15px; background: #f3e5f5; padding: 10px; border-radius: 10px; display: flex; align-items: center; gap: 10px;">
-          <label style="font-size: 12px; font-weight: bold; color: #7b1fa2;">声の高さ:</label>
+          <label style="font-size: 12px; font-weight: bold; color: #7b1fa2;">声のピッチ:</label>
           <input type="range" id="pitch-slider" min="0.5" max="2.0" step="0.1" value="1.0" style="flex: 1; cursor: pointer;">
           <span id="pitch-display" style="font-size: 12px; font-weight: bold; min-width: 25px;">1.0</span>
         </div>
@@ -33,11 +33,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         </div>
 
         <div style="background: #f8f9fa; padding: 15px; border-radius: 12px; text-align: left; margin-bottom: 15px;">
-          <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景画像を設定</label>
-          <input type="file" id="bg-upload" accept="image/*" style="width: 100%; font-size: 10px; margin-top: 5px;">
-          <hr style="border: 0; border-top: 1px solid #ddd; margin: 10px 0;">
-          <label style="font-size: 11px; font-weight: bold; color: #666;">👤 アバター画像設定</label>
-          <div style="display: flex; gap: 5px; margin-top: 5px;">
+          <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景・アバター画像設定</label>
+          <input type="file" id="bg-upload" accept="image/*" style="width: 100%; font-size: 10px; margin-bottom: 5px;">
+          <div style="display: flex; gap: 5px;">
             <input type="file" id="avatar-close" accept="image/*" title="ふだん" style="font-size: 9px; width: 33%;">
             <input type="file" id="avatar-open" accept="image/*" title="しゃべる" style="font-size: 9px; width: 33%;">
             <input type="file" id="avatar-blink" accept="image/*" title="まばたき" style="font-size: 9px; width: 33%;">
@@ -66,7 +64,44 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// --- グローバル変数 ---
+// --- 音響処理（ボイスチェンジャー） ---
+let audioCtx: AudioContext, pitchShifter: DelayNode, feedbackGain: GainNode;
+function setupAudioEffect(stream: MediaStream) {
+  audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+  const source = audioCtx.createMediaStreamSource(stream);
+  const dest = audioCtx.createMediaStreamDestination();
+  
+  pitchShifter = audioCtx.createDelay(1);
+  pitchShifter.delayTime.value = 0;
+  
+  feedbackGain = audioCtx.createGain();
+  feedbackGain.gain.value = 0; // 最初はOFF
+  
+  source.connect(pitchShifter);
+  pitchShifter.connect(feedbackGain);
+  feedbackGain.connect(pitchShifter); // 声をループさせてピッチ感を変える
+  pitchShifter.connect(dest);
+  
+  return dest.stream.getAudioTracks()[0];
+}
+
+const updateVoicePitch = async () => {
+  if (!audioCtx) return;
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+  
+  if (isVoiceEffect) {
+    const pitch = parseFloat(pitchSlider.value);
+    // スライダーの値をディレイに変換（右に行くほど高い声）
+    const dTime = 0.01 + (2.0 - pitch) * 0.02;
+    pitchShifter.delayTime.setTargetAtTime(dTime, audioCtx.currentTime, 0.1);
+    feedbackGain.gain.setTargetAtTime(0.5, audioCtx.currentTime, 0.1);
+  } else {
+    pitchShifter.delayTime.setTargetAtTime(0, audioCtx.currentTime, 0.1);
+    feedbackGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.1);
+  }
+};
+
+// --- その他グローバル変数と描画 ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
@@ -82,40 +117,7 @@ let imgClose: HTMLImageElement | null = null, imgOpen: HTMLImageElement | null =
 let localStream: MediaStream, processedStream: MediaStream;
 let connections: DataConnection[] = [], reactions: { emoji: string, time: number }[] = [];
 
-// --- ボイスチェンジャー設定 (Web Audio API) ---
-let audioCtx: AudioContext, pitchShifter: DelayNode;
-function setupAudioEffect(stream: MediaStream) {
-  audioCtx = new AudioContext();
-  const source = audioCtx.createMediaStreamSource(stream);
-  const dest = audioCtx.createMediaStreamDestination();
-  
-  // 簡易ピッチシフト用のディレイ変調
-  pitchShifter = audioCtx.createDelay();
-  pitchShifter.delayTime.value = 0; 
-  
-  source.connect(pitchShifter);
-  pitchShifter.connect(dest);
-  return dest.stream.getAudioTracks()[0];
-}
-
-// 声のピッチを計算して反映させる関数
-function updateVoicePitch() {
-  if (!pitchShifter) return;
-  if (isVoiceEffect) {
-    const pitch = parseFloat(pitchSlider.value);
-    // スライダーの値(0.5-2.0)をディレイ時間(0.01-0.03)に変換してピッチ感を変える
-    const targetDelay = 0.01 + (2.0 - pitch) * 0.015;
-    pitchShifter.delayTime.setTargetAtTime(targetDelay, audioCtx.currentTime, 0.1);
-  } else {
-    pitchShifter.delayTime.setTargetAtTime(0, audioCtx.currentTime, 0.1);
-  }
-}
-
-// --- 背景・人物描画処理 ---
-const offCanvas = document.createElement('canvas');
-offCanvas.width = 480; offCanvas.height = 360;
-const offCtx = offCanvas.getContext('2d')!;
-
+// 背景・アバター画像設定
 const setupImageUpload = (id: string, cb: (img: HTMLImageElement) => void) => {
   document.querySelector<HTMLInputElement>(`#${id}`)?.addEventListener('change', (e) => {
     const file = (e.target as HTMLInputElement).files?.[0];
@@ -126,6 +128,10 @@ setupImageUpload('avatar-close', (img) => imgClose = img);
 setupImageUpload('avatar-open', (img) => imgOpen = img);
 setupImageUpload('avatar-blink', (img) => imgBlink = img);
 setupImageUpload('bg-upload', (img) => backgroundImg = img);
+
+const offCanvas = document.createElement('canvas');
+offCanvas.width = 480; offCanvas.height = 360;
+const offCtx = offCanvas.getContext('2d')!;
 
 const selfieSegmentation = new SelfieSegmentation({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}` });
 selfieSegmentation.setOptions({ modelSelection: 1 });
@@ -170,7 +176,7 @@ faceMesh.onResults((res) => {
   ctx.restore();
 });
 
-// --- 通信コア機能 ---
+// --- 通信とイベント ---
 const updateStatus = (msg: string) => { statusEl.innerText = msg; console.log(msg); };
 
 function setupRemoteVideo(call: any) {
@@ -194,10 +200,8 @@ const handleData = (conn: DataConnection) => {
     }
     if (data.type === 'reaction') reactions.push({ emoji: data.content, time: Date.now() });
   });
-  conn.on('close', () => document.getElementById(`video-${conn.peer}`)?.remove());
 };
 
-// --- 初期化 ---
 navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true }).then(stream => {
   localStream = stream;
   const audioTrack = setupAudioEffect(stream);
@@ -215,7 +219,6 @@ peer.on('open', (id) => updateStatus(`あなたのID: ${id}`));
 peer.on('connection', (conn) => { updateStatus(`接続中...`); connections.push(conn); handleData(conn); });
 peer.on('call', (call) => { updateStatus(`着信中...`); call.answer(processedStream); setupRemoteVideo(call); });
 
-// --- ボタンイベント ---
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const id = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value.trim();
   if(!id || id === peer.id) return;
@@ -235,19 +238,19 @@ document.querySelector('#send-btn')?.addEventListener('click', () => {
   }
 });
 
-// ボイスチェンジのON/OFF
+// ボイス・ピッチ操作
 document.querySelector('#voice-btn')?.addEventListener('click', () => {
   isVoiceEffect = !isVoiceEffect;
   updateVoicePitch();
   document.querySelector<HTMLButtonElement>('#voice-btn')!.innerText = isVoiceEffect ? "🔊 ボイス: ON" : "🔊 ボイス: OFF";
 });
 
-// ピッチスライダーを動かした時
 pitchSlider.addEventListener('input', () => {
   pitchDisplay.innerText = pitchSlider.value;
   updateVoicePitch();
 });
 
+// その他ボタン操作
 document.querySelectorAll('.react-btn').forEach(b => {
   b.addEventListener('click', () => {
     const emoji = (b as HTMLElement).dataset.emoji!;
