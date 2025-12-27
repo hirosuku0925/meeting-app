@@ -6,7 +6,7 @@ import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; overflow: hidden; background: #f0f2f5;">
     <div style="flex: 1; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto;">
-      <h1 style="color: #333; margin-bottom: 20px;">マルチ会議室</h1>
+      <h1 style="color: #333; margin-bottom: 20px;">マルチ会議室 (3人以上対応版)</h1>
       <div id="video-grid" style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; padding: 10px; width: 100%;">
         <div id="local-container" style="text-align: center;">
           <p style="font-size: 12px; color: #666; margin-bottom: 5px;">自分</p>
@@ -16,11 +16,11 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div class="card" style="width: 100%; max-width: 500px; margin-top: 20px; padding: 20px; border-radius: 16px; background: #fff; box-shadow: 0 10px 25px rgba(0,0,0,0.1);">
         <div style="background: #f8f9fa; padding: 15px; border-radius: 12px; margin-bottom: 15px; text-align: left;">
           <div style="margin-bottom: 10px;">
-            <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景画像を選択 (選ばないとカメラのまま)</label>
+            <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景画像</label>
             <input type="file" id="bg-upload" accept="image/*" style="width: 100%; font-size: 10px; margin-top: 5px;">
           </div>
           <div>
-            <label style="font-size: 11px; font-weight: bold; color: #646cff;">👤 アバター画像を選択</label>
+            <label style="font-size: 11px; font-weight: bold; color: #646cff;">👤 アバター画像</label>
             <input type="file" id="avatar-upload" accept="image/*" style="width: 100%; font-size: 10px; margin-top: 5px;">
           </div>
         </div>
@@ -50,6 +50,7 @@ let backgroundImg: HTMLImageElement | null = null;
 let processedStream: MediaStream;
 const connections: Map<string, DataConnection> = new Map();
 
+// AI描画エンジン
 const selfie = new SelfieSegmentation({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}` });
 selfie.setOptions({ modelSelection: 1 });
 const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
@@ -61,54 +62,38 @@ selfie.onResults((res) => { currentMask = res.segmentationMask; });
 faceMesh.onResults((res) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  
-  // --- 1. 背景の描画 ---
   if (backgroundImg) {
     ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
   }
-
   ctx.translate(canvas.width, 0); ctx.scale(-1, 1);
-  
-  // --- 2. カメラ映像の描画 ---
   if (res.image) {
     if (isAvatarMode) {
-      // 💡 アバターONのときはカメラ映像（顔）を映さない
-      if (!backgroundImg) {
-         // 背景画像がない場合だけ、黒くならないようにカメラをうっすら残すか、背景を塗る
-         ctx.fillStyle = "#f0f2f5";
-         ctx.fillRect(0, 0, canvas.width, canvas.height);
-      }
+      if (!backgroundImg) { ctx.fillStyle = "#f0f2f5"; ctx.fillRect(0, 0, canvas.width, canvas.height); }
     } else if (currentMask && backgroundImg) {
-      // 背景画像がある時だけ、切り抜き合成をする
       const offCanvas = document.createElement('canvas'); offCanvas.width = 480; offCanvas.height = 360;
       const offCtx = offCanvas.getContext('2d')!;
       offCtx.drawImage(currentMask, 0, 0, 480, 360);
       offCtx.globalCompositeOperation = 'source-in'; offCtx.drawImage(res.image, 0, 0, 480, 360);
       ctx.drawImage(offCanvas, 0, 0, canvas.width, canvas.height);
     } else {
-      // 💡 背景を選んでいない時は、普通のカメラ映像をそのまま全画面に映す！
       ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
     }
   }
-
-  // --- 3. アバターの描画 ---
   if (isAvatarMode && res.multiFaceLandmarks?.[0]) {
     const landmarks = res.multiFaceLandmarks[0];
     const centerX = landmarks[1].x * canvas.width;
     const centerY = landmarks[1].y * canvas.height;
     const faceWidth = Math.abs(landmarks[454].x - landmarks[234].x) * canvas.width * 2.0;
-
     if (avatarImg) {
       ctx.drawImage(avatarImg, centerX - faceWidth/2, centerY - faceWidth/2, faceWidth, faceWidth);
     } else {
-      ctx.fillStyle = "#646cff";
-      ctx.beginPath(); ctx.arc(centerX, centerY, 40, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = "#646cff"; ctx.beginPath(); ctx.arc(centerX, centerY, 40, 0, Math.PI*2); ctx.fill();
     }
   }
   ctx.restore();
 });
 
-// 通信（最強同期版）
+// --- 通信処理 (バグ修正の肝) ---
 const peer = new Peer();
 peer.on('open', (id) => statusEl.innerText = `あなたのID: ${id}`);
 
@@ -125,28 +110,45 @@ function addRemoteVideo(stream: MediaStream, remoteId: string) {
   document.querySelector('#video-grid')!.appendChild(div);
 }
 
+// 接続イベントのセットアップ
 function setupConnection(conn: DataConnection) {
+  if (connections.has(conn.peer)) return;
   connections.set(conn.peer, conn);
+
+  conn.on('open', () => {
+    // 💡 繋がった相手に、自分が知っているメンバー全員を教える
+    const members = Array.from(connections.keys()).concat(peer.id);
+    conn.send({ type: 'sync-members', members });
+  });
+
   conn.on('data', (data: any) => {
-    if (data.type === 'sync') {
-      data.members.forEach((mId: string) => { if (mId !== peer.id && !connections.has(mId)) connectTo(mId); });
+    if (data.type === 'sync-members') {
+      // 💡 知らないメンバーがいたら自分から繋ぎに行く
+      data.members.forEach((mId: string) => {
+        if (mId !== peer.id && !connections.has(mId)) {
+          connectTo(mId);
+        }
+      });
     }
   });
+
   conn.on('close', () => {
     connections.delete(conn.peer);
     document.getElementById(`remote-${conn.peer}`)?.remove();
   });
 }
 
+// 自分から繋ぎに行く関数
 function connectTo(id: string) {
   if (connections.has(id) || id === peer.id) return;
   const conn = peer.connect(id);
   setupConnection(conn);
-  conn.on('open', () => conn.send({ type: 'sync', members: Array.from(connections.keys()).concat(peer.id) }));
+  
   const call = peer.call(id, processedStream);
   call.on('stream', (s) => addRemoteVideo(s, id));
 }
 
+// 相手からの接続を待ち受ける
 peer.on('connection', setupConnection);
 peer.on('call', (call) => {
   call.answer(processedStream);
@@ -158,7 +160,7 @@ document.querySelector('#connect-btn')?.addEventListener('click', () => {
   if (id) connectTo(id);
 });
 
-// カメラ開始
+// カメラ・AI起動
 navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
   processedStream = canvas.captureStream(30);
   stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
@@ -167,7 +169,7 @@ navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream =>
   loop();
 });
 
-// ファイル読み込み
+// ファイル・ボタン処理
 const handleFile = (id: string, cb: (i: HTMLImageElement) => void) => {
   document.querySelector(`#${id}`)?.addEventListener('change', (e: any) => {
     const f = e.target.files[0]; if (!f) return;
