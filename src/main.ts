@@ -14,10 +14,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         </div>
       </div>
       <div class="card" style="width: 100%; max-width: 500px; margin-top: 20px; padding: 20px; border-radius: 16px; background: #fff; box-shadow: 0 10px 25px rgba(0,0,0,0.1);">
-        
         <div style="background: #f8f9fa; padding: 15px; border-radius: 12px; margin-bottom: 15px; text-align: left;">
           <div style="margin-bottom: 10px;">
-            <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景画像を選択</label>
+            <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景画像を選択 (選ばないとカメラのまま)</label>
             <input type="file" id="bg-upload" accept="image/*" style="width: 100%; font-size: 10px; margin-top: 5px;">
           </div>
           <div>
@@ -25,12 +24,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
             <input type="file" id="avatar-upload" accept="image/*" style="width: 100%; font-size: 10px; margin-top: 5px;">
           </div>
         </div>
-
         <div style="display: flex; gap: 8px; justify-content: center; margin-bottom: 15px;">
           <button id="avatar-mode-btn" style="background-color: #555; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">👤 アバター: OFF</button>
           <button id="hangup-btn" style="background-color: #f44336; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">退出</button>
         </div>
-        
         <p id="status" style="font-size: 11px; color: #1976D2; font-weight: bold; text-align:center; margin-top:10px;">ID取得中...</p>
         <div style="display: flex; gap: 10px; margin-top:10px;">
              <input id="remote-id-input" type="text" placeholder="相手のID" style="flex: 2; padding: 8px; border-radius: 5px; border: 1px solid #ddd;">
@@ -65,34 +62,36 @@ faceMesh.onResults((res) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   
-  // 1. 背景を描画 (背景がないときはグレー)
+  // --- 1. 背景の描画 ---
   if (backgroundImg) {
     ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
-  } else {
-    ctx.fillStyle = "#333";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 
   ctx.translate(canvas.width, 0); ctx.scale(-1, 1);
   
-  // 2. 人物描画のルール
+  // --- 2. カメラ映像の描画 ---
   if (res.image) {
     if (isAvatarMode) {
-      // 💡 アバターONの時は、「生身の顔」を一切描画しない（顔を隠す）
+      // 💡 アバターONのときはカメラ映像（顔）を映さない
+      if (!backgroundImg) {
+         // 背景画像がない場合だけ、黒くならないようにカメラをうっすら残すか、背景を塗る
+         ctx.fillStyle = "#f0f2f5";
+         ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
     } else if (currentMask && backgroundImg) {
-      // 背景合成モード
+      // 背景画像がある時だけ、切り抜き合成をする
       const offCanvas = document.createElement('canvas'); offCanvas.width = 480; offCanvas.height = 360;
       const offCtx = offCanvas.getContext('2d')!;
       offCtx.drawImage(currentMask, 0, 0, 480, 360);
       offCtx.globalCompositeOperation = 'source-in'; offCtx.drawImage(res.image, 0, 0, 480, 360);
       ctx.drawImage(offCanvas, 0, 0, canvas.width, canvas.height);
     } else {
-      // 通常カメラ
+      // 💡 背景を選んでいない時は、普通のカメラ映像をそのまま全画面に映す！
       ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
     }
   }
 
-  // 3. アバターを描画
+  // --- 3. アバターの描画 ---
   if (isAvatarMode && res.multiFaceLandmarks?.[0]) {
     const landmarks = res.multiFaceLandmarks[0];
     const centerX = landmarks[1].x * canvas.width;
@@ -102,15 +101,14 @@ faceMesh.onResults((res) => {
     if (avatarImg) {
       ctx.drawImage(avatarImg, centerX - faceWidth/2, centerY - faceWidth/2, faceWidth, faceWidth);
     } else {
-      // 💡 画像がない時は仮の丸を表示（真っ黒防止）
-      ctx.fillStyle = "white";
-      ctx.beginPath(); ctx.arc(centerX, centerY, 50, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = "#646cff";
+      ctx.beginPath(); ctx.arc(centerX, centerY, 40, 0, Math.PI*2); ctx.fill();
     }
   }
   ctx.restore();
 });
 
-// 通信まわり
+// 通信（最強同期版）
 const peer = new Peer();
 peer.on('open', (id) => statusEl.innerText = `あなたのID: ${id}`);
 
@@ -118,6 +116,8 @@ function addRemoteVideo(stream: MediaStream, remoteId: string) {
   if (document.getElementById(`remote-${remoteId}`)) return;
   const div = document.createElement('div');
   div.id = `remote-${remoteId}`;
+  div.style.textAlign = "center";
+  div.innerHTML = `<p style="font-size:10px; color:#666; margin-bottom:5px;">User: ${remoteId.slice(0,4)}</p>`;
   const v = document.createElement('video');
   v.style.width = "260px"; v.style.borderRadius = "15px"; v.autoplay = true; v.playsInline = true;
   v.srcObject = stream;
@@ -132,9 +132,14 @@ function setupConnection(conn: DataConnection) {
       data.members.forEach((mId: string) => { if (mId !== peer.id && !connections.has(mId)) connectTo(mId); });
     }
   });
+  conn.on('close', () => {
+    connections.delete(conn.peer);
+    document.getElementById(`remote-${conn.peer}`)?.remove();
+  });
 }
 
 function connectTo(id: string) {
+  if (connections.has(id) || id === peer.id) return;
   const conn = peer.connect(id);
   setupConnection(conn);
   conn.on('open', () => conn.send({ type: 'sync', members: Array.from(connections.keys()).concat(peer.id) }));
@@ -153,7 +158,7 @@ document.querySelector('#connect-btn')?.addEventListener('click', () => {
   if (id) connectTo(id);
 });
 
-// カメラ起動
+// カメラ開始
 navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
   processedStream = canvas.captureStream(30);
   stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
@@ -162,7 +167,7 @@ navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream =>
   loop();
 });
 
-// アップロード設定
+// ファイル読み込み
 const handleFile = (id: string, cb: (i: HTMLImageElement) => void) => {
   document.querySelector(`#${id}`)?.addEventListener('change', (e: any) => {
     const f = e.target.files[0]; if (!f) return;
