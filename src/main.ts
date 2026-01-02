@@ -6,7 +6,7 @@ import * as Kalidokit from 'kalidokit';
 import { Peer } from 'peerjs'
 import { FaceMesh } from '@mediapipe/face_mesh'
 
-// --- 1. UIの構築 (背景アップロードボタンを追加) ---
+// --- 1. UIの構築 ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; overflow: hidden; background: #f0f2f5;">
     <div style="flex: 1; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto;">
@@ -45,10 +45,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('#f0f2f5'); // 初期背景色
+scene.background = new THREE.Color('#f0f2f5'); 
 
 const camera = new THREE.PerspectiveCamera(30, canvas.width / canvas.height, 0.1, 1000);
-camera.position.set(0, 1.45, 0.75); // キツネの顔の正面
+camera.position.set(0, 1.45, 0.75); // キツネの顔の高さ
 
 const renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
 renderer.setSize(canvas.width, canvas.height);
@@ -62,12 +62,14 @@ scene.add(light, new THREE.AmbientLight(0xffffff, 0.5));
 let currentVrm: VRM | null = null;
 const loader = new GLTFLoader();
 loader.register((parser: any) => new VRMLoaderPlugin(parser));
+
+// ファイルパスを正しく設定（./キツネの顔.vrm）
 loader.load('./キツネの顔.vrm', (gltf: any) => {
   const vrm: VRM = gltf.userData.vrm;
   VRMUtils.rotateVRM0(vrm);
   scene.add(vrm.scene);
   currentVrm = vrm;
-});
+}, undefined, (error) => console.error("VRMの読み込みに失敗:", error));
 
 // 背景アップロード処理
 document.querySelector('#bg-upload')?.addEventListener('change', (e: any) => {
@@ -82,7 +84,12 @@ document.querySelector('#bg-upload')?.addEventListener('change', (e: any) => {
 // --- 4. アニメーション (顔連動) ---
 function animateVrm(faceLandmarks: any) {
   if (!currentVrm || !faceLandmarks) return;
-  const riggedFace = Kalidokit.Face.solve(faceLandmarks, { runtime: 'mediapipe', video: video });
+  
+  const riggedFace = Kalidokit.Face.solve(faceLandmarks, {
+    runtime: 'mediapipe',
+    video: video
+  });
+
   if (riggedFace) {
     const head = currentVrm.humanoid.getRawBoneNode('head');
     if (head) {
@@ -111,7 +118,7 @@ function addRemoteVideo(stream: MediaStream, remoteId: string) {
   if (document.getElementById(`remote-${remoteId}`)) return;
   const div = document.createElement('div');
   div.id = `remote-${remoteId}`;
-  div.innerHTML = `<p style="font-size:10px; color:#666; margin-top:5px;">相手: ${remoteId.slice(0,4)}</p>`;
+  div.innerHTML = `<p style="font-size:10px; color:#666;">相手: ${remoteId.slice(0,4)}</p>`;
   const v = document.createElement('video');
   v.style.width = "280px"; v.style.borderRadius = "15px"; v.autoplay = true; v.playsInline = true;
   v.srcObject = stream;
@@ -122,12 +129,15 @@ function addRemoteVideo(stream: MediaStream, remoteId: string) {
 const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
 faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
 faceMesh.onResults((res) => {
-  if (res.multiFaceLandmarks && res.multiFaceLandmarks[0]) animateVrm(res.multiFaceLandmarks[0]);
+  if (res.multiFaceLandmarks && res.multiFaceLandmarks[0]) {
+    animateVrm(res.multiFaceLandmarks[0]);
+  }
 });
 
 // カメラ起動とループ開始
 navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
   video.srcObject = stream;
+  // ビデオの読み込みを待ってからループ開始
   video.onloadedmetadata = () => {
     video.play();
     const loop = async () => {
@@ -140,6 +150,9 @@ navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream =>
     loop();
   };
   stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
+}).catch(err => {
+  console.error("カメラの起動に失敗しました:", err);
+  alert("カメラを許可してください");
 });
 
 // イベント系
