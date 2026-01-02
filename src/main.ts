@@ -5,11 +5,11 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 
-// --- 画面の見た目（すべてのボタンを復活させました） ---
+// --- デザインを完全に元に戻しました ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; overflow: hidden; background: #f0f2f5;">
     <div style="flex: 1; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto;">
-      <h1 style="color: #333; margin-bottom: 20px;">マルチ会議室 (3Dアバター版)</h1>
+      <h1 style="color: #333; margin-bottom: 20px;">マルチ会議室 (Web版)</h1>
       
       <div id="video-grid" style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; padding: 10px; width: 100%;">
         <div id="local-container" style="text-align: center;">
@@ -20,8 +20,16 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 
       <div class="card" style="width: 100%; max-width: 550px; margin-top: 20px; padding: 20px; border-radius: 16px; background: #fff; box-shadow: 0 10px 25px rgba(0,0,0,0.1);">
         <div style="background: #f8f9fa; padding: 15px; border-radius: 12px; margin-bottom: 15px;">
-          <label style="font-size: 11px; font-weight: bold; color: #646cff;">👤 3Dアバター選択 (.vrmファイルをえらんでね)</label>
-          <input type="file" id="vrm-upload" accept=".vrm" style="width: 100%; font-size: 10px; margin-top: 5px;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div>
+              <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景変更</label>
+              <input type="file" id="bg-upload" accept="image/*" style="width: 100%; font-size: 10px; margin-top: 5px;">
+            </div>
+            <div>
+              <label style="font-size: 11px; font-weight: bold; color: #646cff;">👤 アバター選択(.vrm)</label>
+              <input type="file" id="vrm-upload" accept=".vrm" style="width: 100%; font-size: 10px; margin-top: 5px;">
+            </div>
+          </div>
         </div>
         
         <div style="display: flex; gap: 8px; justify-content: center; margin-bottom: 15px; flex-wrap: wrap;">
@@ -61,12 +69,11 @@ let currentVrm: any = null;
 const loader = new GLTFLoader();
 loader.register((parser: any) => new VRMLoaderPlugin(parser));
 
-// --- ファイル選択でVRMを読み込む ---
+// --- 3Dアバター選択を有効化 ---
 document.querySelector('#vrm-upload')?.addEventListener('change', async (e: any) => {
   const file = e.target.files[0];
   if (!file) return;
   const url = URL.createObjectURL(file);
-  statusEl.innerText = "アバターを読み込み中...";
   loader.load(url, (gltf: any) => {
     if (currentVrm) scene.remove(currentVrm.scene);
     currentVrm = gltf.userData.vrm;
@@ -76,7 +83,7 @@ document.querySelector('#vrm-upload')?.addEventListener('change', async (e: any)
   });
 });
 
-// --- AI追跡 ---
+// --- AI追跡 (FaceMesh) ---
 const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
 faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
 
@@ -91,18 +98,25 @@ faceMesh.onResults((res) => {
   renderer.render(scene, camera);
 });
 
-// --- カメラ & 通信設定 (PeerJSのエラーを消すためにここで使います) ---
+// --- カメラ & 通信 ---
 const peer = new Peer();
 peer.on('open', (id) => { statusEl.innerText = `あなたのID: ${id}`; });
 
 document.querySelector('#cam-btn')?.addEventListener('click', async () => {
-  const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-  video.srcObject = stream;
-  const loop = async () => {
-    await faceMesh.send({ image: video });
-    requestAnimationFrame(loop);
-  };
-  loop();
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    video.srcObject = stream;
+    video.onloadedmetadata = () => {
+      video.play();
+      const loop = async () => {
+        await faceMesh.send({ image: video });
+        requestAnimationFrame(loop);
+      };
+      loop();
+    };
+  } catch (err) {
+    statusEl.innerText = "カメラの起動に失敗しました";
+  }
 });
 
 document.querySelector('#hangup-btn')?.addEventListener('click', () => window.location.reload());
