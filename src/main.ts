@@ -6,7 +6,7 @@ import * as Kalidokit from 'kalidokit';
 import { Peer } from 'peerjs'
 import { FaceMesh } from '@mediapipe/face_mesh'
 
-// --- UIの構築 ---
+// --- 1. UIの構築 (背景アップロードボタンを追加) ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; overflow: hidden; background: #f0f2f5;">
     <div style="flex: 1; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto;">
@@ -20,20 +20,20 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
 
       <div class="card" style="width: 100%; max-width: 500px; margin-top: 20px; padding: 20px; border-radius: 16px; background: #fff; box-shadow: 0 10px 25px rgba(0,0,0,0.1);">
-        <div style="background: #f8f9fa; padding: 12px; border-radius: 10px; margin-bottom: 15px; text-align: left;">
+        <div style="background: #e3f2fd; padding: 12px; border-radius: 10px; margin-bottom: 15px; text-align: left; border: 1px solid #bbdefb;">
           <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景画像を選択</label>
           <input type="file" id="bg-upload" accept="image/*" style="width: 100%; font-size: 10px; margin-top: 5px;">
         </div>
 
         <div style="display: flex; gap: 8px; justify-content: center; margin-bottom: 15px;">
-          <button id="mic-btn" style="background-color: #4CAF50; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">🎤 マイク</button>
-          <button id="cam-btn" style="background-color: #4CAF50; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">📷 カメラ</button>
+          <button id="mic-btn" style="background-color: #4CAF50; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">🎤</button>
+          <button id="cam-btn" style="background-color: #4CAF50; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">📷</button>
           <button id="hangup-btn" style="background-color: #f44336; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">退出</button>
         </div>
         <p id="status" style="font-size: 11px; color: #1976D2; font-weight: bold; text-align:center;">ID取得中...</p>
         <div style="display: flex; gap: 10px; margin-top:10px;">
-             <input id="remote-id-input" type="text" placeholder="相手のID" style="flex: 2; padding: 8px; border-radius: 5px; border: 1px solid #ddd;">
-             <button id="connect-btn" style="flex: 1; background-color: #646cff; color: white; border-radius: 5px; border:none; cursor:pointer;">入室</button>
+             <input id="remote-id-input" type="text" placeholder="相手のIDを入力" style="flex: 2; padding: 8px; border-radius: 5px; border: 1px solid #ddd;">
+             <button id="connect-btn" style="flex: 1; background-color: #646cff; color: white; border-radius: 5px; border:none; cursor:pointer; font-weight:bold;">入室</button>
         </div>
       </div>
     </div>
@@ -41,14 +41,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// --- 3D設定 ---
+// --- 2. 3Dシーン設定 ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('#f0f2f5'); // デフォルト背景色
+scene.background = new THREE.Color('#f0f2f5'); // 初期背景色
 
 const camera = new THREE.PerspectiveCamera(30, canvas.width / canvas.height, 0.1, 1000);
-camera.position.set(0, 1.45, 0.75);
+camera.position.set(0, 1.45, 0.75); // キツネの顔の正面
 
 const renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
 renderer.setSize(canvas.width, canvas.height);
@@ -58,7 +58,7 @@ const light = new THREE.DirectionalLight(0xffffff);
 light.position.set(1, 1, 1).normalize();
 scene.add(light, new THREE.AmbientLight(0xffffff, 0.5));
 
-// --- VRM読み込み ---
+// --- 3. VRM読み込みと背景変更ロジック ---
 let currentVrm: VRM | null = null;
 const loader = new GLTFLoader();
 loader.register((parser: any) => new VRMLoaderPlugin(parser));
@@ -69,7 +69,7 @@ loader.load('./キツネの顔.vrm', (gltf: any) => {
   currentVrm = vrm;
 });
 
-// --- 背景変更ロジック ---
+// 背景アップロード処理
 document.querySelector('#bg-upload')?.addEventListener('change', (e: any) => {
   const file = e.target.files[0];
   if (!file) return;
@@ -79,7 +79,7 @@ document.querySelector('#bg-upload')?.addEventListener('change', (e: any) => {
   });
 });
 
-// --- アニメーション ---
+// --- 4. アニメーション (顔連動) ---
 function animateVrm(faceLandmarks: any) {
   if (!currentVrm || !faceLandmarks) return;
   const riggedFace = Kalidokit.Face.solve(faceLandmarks, { runtime: 'mediapipe', video: video });
@@ -90,12 +90,13 @@ function animateVrm(faceLandmarks: any) {
       head.rotation.x = riggedFace.head.x;
       head.rotation.z = riggedFace.head.z;
     }
+    // 表情（瞬き・口パク）
     currentVrm.expressionManager?.setValue('blink', 1 - riggedFace.eye.l);
     currentVrm.expressionManager?.setValue('aa', riggedFace.mouth.shape.A);
   }
 }
 
-// --- 通信とFaceMesh ---
+// --- 5. 通信とカメラループ ---
 const statusEl = document.querySelector<HTMLElement>('#status')!;
 const peer = new Peer();
 let processedStream: MediaStream = canvas.captureStream(30);
@@ -110,7 +111,7 @@ function addRemoteVideo(stream: MediaStream, remoteId: string) {
   if (document.getElementById(`remote-${remoteId}`)) return;
   const div = document.createElement('div');
   div.id = `remote-${remoteId}`;
-  div.innerHTML = `<p style="font-size:10px; color:#666;">相手: ${remoteId.slice(0,4)}</p>`;
+  div.innerHTML = `<p style="font-size:10px; color:#666; margin-top:5px;">相手: ${remoteId.slice(0,4)}</p>`;
   const v = document.createElement('video');
   v.style.width = "280px"; v.style.borderRadius = "15px"; v.autoplay = true; v.playsInline = true;
   v.srcObject = stream;
@@ -124,7 +125,7 @@ faceMesh.onResults((res) => {
   if (res.multiFaceLandmarks && res.multiFaceLandmarks[0]) animateVrm(res.multiFaceLandmarks[0]);
 });
 
-// --- カメラ起動 & ループ ---
+// カメラ起動とループ開始
 navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
   video.srcObject = stream;
   video.onloadedmetadata = () => {
@@ -141,7 +142,7 @@ navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream =>
   stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
 });
 
-// ボタン系イベント
+// イベント系
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const id = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value.trim();
   if (id && id !== peer.id) {
