@@ -6,21 +6,21 @@ import * as Kalidokit from 'kalidokit';
 import { Peer, DataConnection } from 'peerjs'
 import { FaceMesh } from '@mediapipe/face_mesh'
 
-// --- 1. UIの構築 ---
+// --- 1. UI構築 ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; overflow: hidden; background: #f0f2f5;">
     <div style="flex: 1; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto;">
       <h1 style="color: #333; margin-bottom: 20px;">マルチ会議室 (VRM対応版)</h1>
       <div id="video-grid" style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; padding: 10px; width: 100%;">
         <div id="local-container" style="text-align: center;">
-          <p style="font-size: 12px; color: #666; margin-bottom: 5px;">自分</p>
-          <canvas id="local-canvas" width="480" height="360" style="width: 260px; border: 3px solid #646cff; border-radius: 15px; background: #222; box-shadow: 0 8px 16px rgba(0,0,0,0.2);"></canvas>
+          <p style="font-size: 12px; color: #666; margin-bottom: 5px;">自分 (3Dキツネ)</p>
+          <canvas id="local-canvas" width="480" height="360" style="width: 260px; border: 3px solid #646cff; border-radius: 15px; background: #222; box-shadow: 0 8px 16px rgba(0,0,0,0.2); transition: background 0.3s;"></canvas>
         </div>
       </div>
       <div class="card" style="width: 100%; max-width: 500px; margin-top: 20px; padding: 20px; border-radius: 16px; background: #fff; box-shadow: 0 10px 25px rgba(0,0,0,0.1);">
         <div style="background: #f8f9fa; padding: 15px; border-radius: 12px; margin-bottom: 15px; text-align: left;">
           <div style="margin-bottom: 10px;">
-            <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景画像</label>
+            <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景画像を選択</label>
             <input type="file" id="bg-upload" accept="image/*" style="width: 100%; font-size: 10px; margin-top: 5px;">
           </div>
           <p id="vrm-status" style="font-size: 10px; color: #666;">アバター読み込み中...</p>
@@ -33,7 +33,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         </div>
         <p id="status" style="font-size: 11px; color: #1976D2; font-weight: bold; text-align:center;">ID取得中...</p>
         <div style="display: flex; gap: 10px; margin-top:10px;">
-             <input id="remote-id-input" type="text" placeholder="相手のID" style="flex: 2; padding: 8px; border-radius: 5px; border: 1px solid #ddd;">
+             <input id="remote-id-input" type="text" placeholder="相手のIDを入力" style="flex: 2; padding: 8px; border-radius: 5px; border: 1px solid #ddd;">
              <button id="connect-btn" style="flex: 1; background-color: #646cff; color: white; border-radius: 5px; border:none; cursor:pointer;">入室</button>
         </div>
       </div>
@@ -42,26 +42,30 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// --- 2. 3Dシーン & VRM設定 ---
+// --- 2. 3Dシーン & カメラ設定 ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(30, canvas.width / canvas.height, 0.1, 1000);
-camera.position.set(0, 1.45, 0.85);
+
+// 💡 画角とカメラ位置を調整して顔を中央に
+const camera = new THREE.PerspectiveCamera(35, canvas.width / canvas.height, 0.1, 1000);
+camera.position.set(0, 1.42, 0.7); 
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setClearColor(0x000000, 0); // 💡 背景透過を有効化
 renderer.setSize(canvas.width, canvas.height);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-const light = new THREE.DirectionalLight(0xffffff, 1.0);
+const light = new THREE.DirectionalLight(0xffffff, 1.5);
 light.position.set(1, 1, 1).normalize();
-scene.add(light, new THREE.AmbientLight(0xffffff, 0.5));
+scene.add(light, new THREE.AmbientLight(0xffffff, 0.7));
 
 let currentVrm: VRM | null = null;
 let isAvatarMode = false;
 let videoTexture: THREE.VideoTexture | null = null;
-let currentBg: THREE.Texture | null = null;
+let currentBgUrl: string | null = null;
 
+// VRMロード
 const loader = new GLTFLoader();
 loader.register((parser: any) => new VRMLoaderPlugin(parser));
 loader.load('./キツネの顔.vrm', (gltf) => {
@@ -71,9 +75,12 @@ loader.load('./キツネの顔.vrm', (gltf) => {
   currentVrm = vrm;
   vrm.scene.visible = false;
   document.getElementById('vrm-status')!.innerText = "アバター準備完了";
+}, undefined, (err) => {
+  console.error(err);
+  document.getElementById('vrm-status')!.innerText = "VRM読み込みエラー";
 });
 
-// --- 3. アニメーション & 顔認識 ---
+// --- 3. 顔認識 & アニメーション ---
 const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
 faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
 
@@ -82,26 +89,39 @@ faceMesh.onResults((res) => {
     const riggedFace = Kalidokit.Face.solve(res.multiFaceLandmarks[0], { runtime: 'mediapipe', video: video });
     if (riggedFace) {
       const head = currentVrm.humanoid.getRawBoneNode('head');
-      if (head) {
-        head.rotation.y = riggedFace.head.y;
+      const neck = currentVrm.humanoid.getRawBoneNode('neck');
+      if (head && neck) {
+        // 💡 追従感度アップ
+        head.rotation.y = riggedFace.head.y * 1.4;
+        neck.rotation.y = riggedFace.head.y * 0.4;
         head.rotation.x = riggedFace.head.x;
         head.rotation.z = riggedFace.head.z;
       }
       currentVrm.expressionManager?.setValue('blink', 1 - riggedFace.eye.l);
-      currentVrm.expressionManager?.setValue('aa', riggedFace.mouth.shape.A);
+      currentVrm.expressionManager?.setValue('aa', riggedFace.mouth.shape.A * 1.5);
     }
   }
+
+  // 💡 背景切り替えロジック
   if (isAvatarMode) {
-    scene.background = currentBg ? currentBg : new THREE.Color('#f0f2f5');
+    scene.background = null; 
     if (currentVrm) currentVrm.scene.visible = true;
+    if (currentBgUrl) {
+      canvas.style.backgroundImage = `url(${currentBgUrl})`;
+      canvas.style.backgroundSize = "cover";
+      canvas.style.backgroundPosition = "center";
+    } else {
+      canvas.style.background = "#f0f2f5";
+    }
   } else {
     scene.background = videoTexture;
+    canvas.style.backgroundImage = "none";
     if (currentVrm) currentVrm.scene.visible = false;
   }
   renderer.render(scene, camera);
 });
 
-// --- 4. 通信 (PeerJS) ---
+// --- 4. PeerJS 通信 ---
 const connections: Map<string, DataConnection> = new Map();
 const peer = new Peer();
 let processedStream: MediaStream = canvas.captureStream(30);
@@ -154,7 +174,7 @@ peer.on('call', (call) => {
   call.on('stream', (s) => addRemoteVideo(s, call.peer));
 });
 
-// --- 5. カメラ・マイク制御 ---
+// --- 5. カメラ起動 & メインループ ---
 let localStream: MediaStream;
 navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
   localStream = stream;
@@ -198,11 +218,7 @@ document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
 
 document.querySelector('#bg-upload')?.addEventListener('change', (e: any) => {
   const file = e.target.files[0];
-  if (!file) return;
-  new THREE.TextureLoader().load(URL.createObjectURL(file), (t) => {
-    t.colorSpace = THREE.SRGBColorSpace;
-    currentBg = t;
-  });
+  if (file) currentBgUrl = URL.createObjectURL(file);
 });
 
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
