@@ -6,7 +6,7 @@ import * as Kalidokit from 'kalidokit';
 import { Peer, DataConnection } from 'peerjs'
 import { FaceMesh } from '@mediapipe/face_mesh'
 
-// --- 1. UIの構築 (マイク・カメラボタンを追加) ---
+// --- 1. UIの構築 ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; overflow: hidden; background: #f0f2f5;">
     <div style="flex: 1; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto;">
@@ -23,20 +23,15 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
             <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景画像</label>
             <input type="file" id="bg-upload" accept="image/*" style="width: 100%; font-size: 10px; margin-top: 5px;">
           </div>
-          <div>
-            <label style="font-size: 11px; font-weight: bold; color: #646cff;">👤 3Dアバター状態</label>
-            <p id="vrm-status" style="font-size: 10px; color: #666;">読み込み中...</p>
-          </div>
+          <p id="vrm-status" style="font-size: 10px; color: #666;">アバター読み込み中...</p>
         </div>
-        
         <div style="display: flex; gap: 8px; justify-content: center; margin-bottom: 15px; flex-wrap: wrap;">
           <button id="mic-btn" style="background-color: #4CAF50; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">🎤 ON</button>
           <button id="cam-btn" style="background-color: #4CAF50; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">📷 ON</button>
           <button id="avatar-mode-btn" style="background-color: #555; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">👤 アバター: OFF</button>
           <button id="hangup-btn" style="background-color: #f44336; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">退出</button>
         </div>
-
-        <p id="status" style="font-size: 11px; color: #1976D2; font-weight: bold; text-align:center; margin-top:10px;">ID取得中...</p>
+        <p id="status" style="font-size: 11px; color: #1976D2; font-weight: bold; text-align:center;">ID取得中...</p>
         <div style="display: flex; gap: 10px; margin-top:10px;">
              <input id="remote-id-input" type="text" placeholder="相手のID" style="flex: 2; padding: 8px; border-radius: 5px; border: 1px solid #ddd;">
              <button id="connect-btn" style="flex: 1; background-color: #646cff; color: white; border-radius: 5px; border:none; cursor:pointer;">入室</button>
@@ -47,85 +42,77 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// --- 2. 3Dシーン & 変数 ---
+// --- 2. 3Dシーン & VRM設定 ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
-const statusEl = document.querySelector<HTMLElement>('#status')!;
-const vrmStatusEl = document.querySelector<HTMLElement>('#vrm-status')!;
-
 const scene = new THREE.Scene();
-const bgDefaultColor = new THREE.Color('#f0f2f5');
-scene.background = bgDefaultColor;
-
 const camera = new THREE.PerspectiveCamera(30, canvas.width / canvas.height, 0.1, 1000);
-camera.position.set(0, 1.45, 0.75);
+camera.position.set(0, 1.45, 0.85);
 
-const renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
 renderer.setSize(canvas.width, canvas.height);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-const light = new THREE.DirectionalLight(0xffffff);
+const light = new THREE.DirectionalLight(0xffffff, 1.0);
 light.position.set(1, 1, 1).normalize();
 scene.add(light, new THREE.AmbientLight(0xffffff, 0.5));
 
 let currentVrm: VRM | null = null;
 let isAvatarMode = false;
 let videoTexture: THREE.VideoTexture | null = null;
-let localStream: MediaStream | null = null;
+let currentBg: THREE.Texture | null = null;
 
-// VRMロード
 const loader = new GLTFLoader();
 loader.register((parser: any) => new VRMLoaderPlugin(parser));
-loader.load('./キツネの顔.vrm', (gltf: any) => {
-  const vrm: VRM = gltf.userData.vrm;
+loader.load('./キツネの顔.vrm', (gltf) => {
+  const vrm = gltf.userData.vrm;
   VRMUtils.rotateVRM0(vrm);
   scene.add(vrm.scene);
   currentVrm = vrm;
   vrm.scene.visible = false;
-  vrmStatusEl.innerText = "キツネの顔.vrm 準備完了";
-}, undefined, () => { vrmStatusEl.innerText = "VRM読み込み失敗 (publicフォルダを確認！)"; });
+  document.getElementById('vrm-status')!.innerText = "アバター準備完了";
+});
 
-// --- 3. AIエンジン設定 ---
+// --- 3. アニメーション & 顔認識 ---
 const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
 faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
 
 faceMesh.onResults((res) => {
-  if (currentVrm) {
-    currentVrm.scene.visible = isAvatarMode;
-    if (isAvatarMode && res.multiFaceLandmarks?.[0]) {
-      const riggedFace = Kalidokit.Face.solve(res.multiFaceLandmarks[0], { runtime: 'mediapipe', video: video });
-      if (riggedFace) {
-        const head = currentVrm.humanoid.getRawBoneNode('head');
-        if (head) {
-          head.rotation.y = riggedFace.head.y;
-          head.rotation.x = riggedFace.head.x;
-          head.rotation.z = riggedFace.head.z;
-        }
-        currentVrm.expressionManager?.setValue('blink', 1 - riggedFace.eye.l);
-        currentVrm.expressionManager?.setValue('aa', riggedFace.mouth.shape.A);
+  if (currentVrm && isAvatarMode && res.multiFaceLandmarks?.[0]) {
+    const riggedFace = Kalidokit.Face.solve(res.multiFaceLandmarks[0], { runtime: 'mediapipe', video: video });
+    if (riggedFace) {
+      const head = currentVrm.humanoid.getRawBoneNode('head');
+      if (head) {
+        head.rotation.y = riggedFace.head.y;
+        head.rotation.x = riggedFace.head.x;
+        head.rotation.z = riggedFace.head.z;
       }
+      currentVrm.expressionManager?.setValue('blink', 1 - riggedFace.eye.l);
+      currentVrm.expressionManager?.setValue('aa', riggedFace.mouth.shape.A);
     }
   }
-
-  // 背景の描画制御
-  if (!isAvatarMode && videoTexture) {
-      scene.background = videoTexture;
+  if (isAvatarMode) {
+    scene.background = currentBg ? currentBg : new THREE.Color('#f0f2f5');
+    if (currentVrm) currentVrm.scene.visible = true;
+  } else {
+    scene.background = videoTexture;
+    if (currentVrm) currentVrm.scene.visible = false;
   }
   renderer.render(scene, camera);
 });
 
-// --- 4. 通信 (変更なし) ---
+// --- 4. 通信 (PeerJS) ---
 const connections: Map<string, DataConnection> = new Map();
 const peer = new Peer();
 let processedStream: MediaStream = canvas.captureStream(30);
 
-peer.on('open', (id) => statusEl.innerText = `あなたのID: ${id}`);
+peer.on('open', (id) => document.getElementById('status')!.innerText = `あなたのID: ${id}`);
 
 function addRemoteVideo(stream: MediaStream, remoteId: string) {
   if (document.getElementById(`remote-${remoteId}`)) return;
   const div = document.createElement('div');
   div.id = `remote-${remoteId}`;
-  div.style.textAlign = "center";
-  div.innerHTML = `<p style="font-size:10px; color:#666;">User: ${remoteId.slice(0,4)}</p>`;
+  div.innerHTML = `<p style="font-size:10px; color:#666; margin-bottom:5px;">User: ${remoteId.slice(0,4)}</p>`;
   const v = document.createElement('video');
   v.style.width = "260px"; v.style.borderRadius = "15px"; v.autoplay = true; v.playsInline = true;
   v.srcObject = stream;
@@ -167,7 +154,8 @@ peer.on('call', (call) => {
   call.on('stream', (s) => addRemoteVideo(s, call.peer));
 });
 
-// --- 5. カメラ・マイク起動修正 ---
+// --- 5. カメラ・マイク制御 ---
+let localStream: MediaStream;
 navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
   localStream = stream;
   video.srcObject = stream;
@@ -184,26 +172,21 @@ navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream =>
   stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
 });
 
-// --- 6. UIイベント (マイク・カメラ・アバター) ---
+// --- 6. イベントリスナー ---
 document.querySelector('#mic-btn')?.addEventListener('click', () => {
-  if (!localStream) return;
-  const audioTrack = localStream.getAudioTracks()[0];
-  audioTrack.enabled = !audioTrack.enabled;
+  const track = localStream.getAudioTracks()[0];
+  track.enabled = !track.enabled;
   const btn = document.querySelector<HTMLButtonElement>('#mic-btn')!;
-  btn.innerText = audioTrack.enabled ? "🎤 ON" : "🎤 OFF";
-  btn.style.backgroundColor = audioTrack.enabled ? "#4CAF50" : "#f44336";
+  btn.innerText = track.enabled ? "🎤 ON" : "🎤 OFF";
+  btn.style.backgroundColor = track.enabled ? "#4CAF50" : "#f44336";
 });
 
 document.querySelector('#cam-btn')?.addEventListener('click', () => {
-  if (!localStream) return;
-  const videoTrack = localStream.getVideoTracks()[0];
-  videoTrack.enabled = !videoTrack.enabled;
+  const track = localStream.getVideoTracks()[0];
+  track.enabled = !track.enabled;
   const btn = document.querySelector<HTMLButtonElement>('#cam-btn')!;
-  btn.innerText = videoTrack.enabled ? "📷 ON" : "📷 OFF";
-  btn.style.backgroundColor = videoTrack.enabled ? "#4CAF50" : "#f44336";
-  // カメラオフの時はキャンバスを黒っぽくする
-  if (!videoTrack.enabled) scene.background = new THREE.Color('#000000');
-  else if (!isAvatarMode) scene.background = videoTexture;
+  btn.innerText = track.enabled ? "📷 ON" : "📷 OFF";
+  btn.style.backgroundColor = track.enabled ? "#4CAF50" : "#f44336";
 });
 
 document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
@@ -211,19 +194,14 @@ document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
   const btn = document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!;
   btn.innerText = isAvatarMode ? "👤 アバター: ON" : "👤 アバター: OFF";
   btn.style.backgroundColor = isAvatarMode ? "#646cff" : "#555";
-  
-  if (!isAvatarMode) {
-      const videoTrack = localStream?.getVideoTracks()[0];
-      scene.background = (videoTrack && videoTrack.enabled) ? videoTexture : new THREE.Color('#000000');
-  } else {
-      scene.background = bgDefaultColor;
-  }
 });
 
 document.querySelector('#bg-upload')?.addEventListener('change', (e: any) => {
-  const f = e.target.files[0]; if (!f) return;
-  new THREE.TextureLoader().load(URL.createObjectURL(f), (texture) => {
-    if (isAvatarMode) scene.background = texture;
+  const file = e.target.files[0];
+  if (!file) return;
+  new THREE.TextureLoader().load(URL.createObjectURL(file), (t) => {
+    t.colorSpace = THREE.SRGBColorSpace;
+    currentBg = t;
   });
 });
 
