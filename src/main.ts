@@ -6,7 +6,7 @@ import * as Kalidokit from 'kalidokit';
 import { Peer, DataConnection } from 'peerjs'
 import { FaceMesh } from '@mediapipe/face_mesh'
 
-// --- 1. UIの構築 (元のデザインを完全にそのまま維持) ---
+// --- 1. UIの構築 (変更なし) ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; overflow: hidden; background: #f0f2f5;">
     <div style="flex: 1; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto;">
@@ -49,7 +49,9 @@ const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const statusEl = document.querySelector<HTMLElement>('#status')!;
 
 const scene = new THREE.Scene();
+// 初期状態は背景色を設定
 scene.background = new THREE.Color('#f0f2f5'); 
+
 const camera = new THREE.PerspectiveCamera(30, canvas.width / canvas.height, 0.1, 1000);
 camera.position.set(0, 1.45, 0.75);
 
@@ -62,6 +64,7 @@ scene.add(light, new THREE.AmbientLight(0xffffff, 0.5));
 
 let currentVrm: VRM | null = null;
 let isAvatarMode = false;
+let videoTexture: THREE.VideoTexture | null = null;
 
 // VRMロード
 const loader = new GLTFLoader();
@@ -95,6 +98,12 @@ faceMesh.onResults((res) => {
       }
     }
   }
+
+  // 💡 アバターOFFの時、カメラ映像を背景として描画する
+  if (!isAvatarMode && videoTexture) {
+      scene.background = videoTexture;
+  }
+
   renderer.render(scene, camera);
 });
 
@@ -112,7 +121,8 @@ function addRemoteVideo(stream: MediaStream, remoteId: string) {
   div.style.textAlign = "center";
   div.innerHTML = `<p style="font-size:10px; color:#666; margin-bottom:5px;">User: ${remoteId.slice(0,4)}</p>`;
   const v = document.createElement('video');
-  v.style.width = "260px"; v.style.borderRadius = "15px"; v.autoplay = true; v.srcObject = stream;
+  v.style.width = "260px"; v.style.borderRadius = "15px"; v.autoplay = true; v.playsInline = true;
+  v.srcObject = stream;
   div.appendChild(v);
   document.querySelector('#video-grid')!.appendChild(div);
 }
@@ -151,22 +161,34 @@ peer.on('call', (call) => {
   call.on('stream', (s) => addRemoteVideo(s, call.peer));
 });
 
+// 💡 カメラ起動の修正
 navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
   video.srcObject = stream;
-  video.play();
-  stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
-  const loop = async () => {
-    if (video.readyState >= 2) await faceMesh.send({ image: video });
-    requestAnimationFrame(loop);
+  video.onloadedmetadata = () => {
+    video.play();
+    // 💡 Three.js用のビデオテクスチャを作成
+    videoTexture = new THREE.VideoTexture(video);
+    videoTexture.colorSpace = THREE.SRGBColorSpace;
+    
+    const loop = async () => {
+      if (video.readyState >= 2) {
+        await faceMesh.send({ image: video });
+      }
+      requestAnimationFrame(loop);
+    };
+    loop();
   };
-  loop();
+  stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
 });
 
-// --- 5. UIボタン操作の維持 ---
+// --- 5. UIボタン操作 ---
 document.querySelector('#bg-upload')?.addEventListener('change', (e: any) => {
   const f = e.target.files[0]; if (!f) return;
   new THREE.TextureLoader().load(URL.createObjectURL(f), (texture) => {
-    scene.background = texture;
+    // 💡 アバターモードの時のみ背景画像をセットする
+    if (isAvatarMode) {
+        scene.background = texture;
+    }
   });
 });
 
@@ -175,6 +197,13 @@ document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
   const btn = document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!;
   btn.innerText = isAvatarMode ? "👤 アバター: ON" : "👤 アバター: OFF";
   btn.style.backgroundColor = isAvatarMode ? "#646cff" : "#555";
+  
+  // 💡 モード切替時に背景をリセット（実写ならビデオ、アバターなら背景色へ）
+  if (!isAvatarMode) {
+      scene.background = videoTexture;
+  } else {
+      scene.background = new THREE.Color('#f0f2f5');
+  }
 });
 
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
