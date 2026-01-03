@@ -5,9 +5,8 @@ import { VRM, VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 import * as Kalidokit from 'kalidokit';
 import { Peer, DataConnection } from 'peerjs'
 import { FaceMesh } from '@mediapipe/face_mesh'
-import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 
-// --- 1. UIの構築 (元のデザインを完全に維持) ---
+// --- 1. UIの構築 (元のデザインを完全にそのまま維持) ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; overflow: hidden; background: #f0f2f5;">
     <div style="flex: 1; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto;">
@@ -25,8 +24,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
             <input type="file" id="bg-upload" accept="image/*" style="width: 100%; font-size: 10px; margin-top: 5px;">
           </div>
           <div>
-            <label style="font-size: 11px; font-weight: bold; color: #646cff;">👤 3Dアバター (VRM) 状態</label>
-            <p style="font-size: 10px; color: #666;">「キツネの顔.vrm」を自動ロード済み</p>
+            <label style="font-size: 11px; font-weight: bold; color: #646cff;">👤 3Dアバター状態</label>
+            <p style="font-size: 10px; color: #666;">キツネの顔.vrm 読み込み中...</p>
           </div>
         </div>
         <div style="display: flex; gap: 8px; justify-content: center; margin-bottom: 15px;">
@@ -44,15 +43,16 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// --- 2. 3D/VRM & MediaPipe 設定 ---
+// --- 2. 3Dシーン & VRM設定 ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const statusEl = document.querySelector<HTMLElement>('#status')!;
 
-// Three.js シーン
 const scene = new THREE.Scene();
+scene.background = new THREE.Color('#f0f2f5'); 
 const camera = new THREE.PerspectiveCamera(30, canvas.width / canvas.height, 0.1, 1000);
 camera.position.set(0, 1.45, 0.75);
+
 const renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
 renderer.setSize(canvas.width, canvas.height);
 
@@ -62,7 +62,6 @@ scene.add(light, new THREE.AmbientLight(0xffffff, 0.5));
 
 let currentVrm: VRM | null = null;
 let isAvatarMode = false;
-let backgroundImgTexture: THREE.Texture | null = null;
 
 // VRMロード
 const loader = new GLTFLoader();
@@ -72,16 +71,13 @@ loader.load('./キツネの顔.vrm', (gltf: any) => {
   VRMUtils.rotateVRM0(vrm);
   scene.add(vrm.scene);
   currentVrm = vrm;
-  vrm.scene.visible = false; // 最初はOFF
+  vrm.scene.visible = false;
 });
 
-// AIエンジン
-const selfie = new SelfieSegmentation({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}` });
+// --- 3. アニメーション & AI ---
 const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
-selfie.setOptions({ modelSelection: 1 });
 faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
 
-// --- 3. 描画ロジック (2D背景 + 3Dアバターの融合) ---
 faceMesh.onResults((res) => {
   if (currentVrm) {
     currentVrm.scene.visible = isAvatarMode;
@@ -102,7 +98,7 @@ faceMesh.onResults((res) => {
   renderer.render(scene, camera);
 });
 
-// --- 4. 通信・カメラ処理 (変更なし) ---
+// --- 4. 通信ロジック (維持) ---
 const connections: Map<string, DataConnection> = new Map();
 const peer = new Peer();
 let processedStream: MediaStream = canvas.captureStream(30);
@@ -160,13 +156,13 @@ navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream =>
   video.play();
   stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
   const loop = async () => {
-    await faceMesh.send({ image: video });
+    if (video.readyState >= 2) await faceMesh.send({ image: video });
     requestAnimationFrame(loop);
   };
   loop();
 });
 
-// --- 5. UIイベント処理 ---
+// --- 5. UIボタン操作の維持 ---
 document.querySelector('#bg-upload')?.addEventListener('change', (e: any) => {
   const f = e.target.files[0]; if (!f) return;
   new THREE.TextureLoader().load(URL.createObjectURL(f), (texture) => {
