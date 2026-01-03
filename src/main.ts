@@ -13,6 +13,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     
     <div style="position: relative; width: 480px; height: 360px; background: #000; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.3); flex-shrink: 0;">
       <canvas id="final-canvas" style="width: 100%; height: 100%; object-fit: cover;"></canvas>
+      
       <video id="hidden-video" style="display:none;" autoplay playsinline muted></video>
       <canvas id="vrm-canvas" style="display:none;"></canvas>
     </div>
@@ -21,6 +22,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div style="background: #f8f9fa; padding: 12px; border-radius: 10px; margin-bottom: 15px;">
         <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景画像を選択</label>
         <input type="file" id="bg-upload" accept="image/*" style="width: 100%; font-size: 11px; margin-top: 5px;">
+        <button id="bg-reset" style="font-size: 10px; margin-top: 5px; cursor: pointer;">背景を実写に戻す</button>
         <p id="vrm-status" style="font-size: 10px; color: #666; margin-top: 5px;">アバター読み込み中...</p>
       </div>
 
@@ -73,7 +75,7 @@ loader.load('./キツネの顔.vrm', (gltf) => {
   document.getElementById('vrm-status')!.innerText = "アバター準備完了";
 });
 
-// --- 3. 顔認識と表情・追従 ---
+// --- 3. 顔認識と追従 ---
 const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
 faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
 
@@ -92,7 +94,6 @@ faceMesh.onResults((res) => {
       const nose = landmarks[1];
       currentVrm.scene.position.x = -(nose.x - 0.5) * 0.55; 
       currentVrm.scene.position.y = -(nose.y - 0.5) * 0.45;
-
       currentVrm.expressionManager?.setValue('blink', 1 - riggedFace.eye.l);
       currentVrm.expressionManager?.setValue('aa', riggedFace.mouth.shape.A * 1.5);
     }
@@ -100,7 +101,7 @@ faceMesh.onResults((res) => {
   renderer.render(scene, camera);
 });
 
-// --- 4. 映像合成ロジック ---
+// --- 4. 映像合成ロジック (ここが重要！) ---
 const finalCanvas = document.querySelector<HTMLCanvasElement>('#final-canvas')!;
 finalCanvas.width = 480;
 finalCanvas.height = 360;
@@ -108,14 +109,20 @@ const finalCtx = finalCanvas.getContext('2d')!;
 
 function compose() {
   finalCtx.clearRect(0, 0, 480, 360);
+  
+  // 1. 背景を描く (画像があれば画像、なければカメラ)
   if (bgImage) {
     finalCtx.drawImage(bgImage, 0, 0, 480, 360);
   } else {
+    // カメラ映像を左右反転させて鏡のようにするならここを調整
     finalCtx.drawImage(video, 0, 0, 480, 360);
   }
+  
+  // 2. アバターを重ねる
   if (isAvatarMode && currentVrm) {
     finalCtx.drawImage(vrmCanvas, 0, 0, 480, 360);
   }
+  
   requestAnimationFrame(compose);
 }
 compose();
@@ -167,6 +174,10 @@ document.querySelector('#bg-upload')?.addEventListener('change', (e: any) => {
     img.onload = () => { bgImage = img; };
     img.src = url;
   }
+});
+
+document.querySelector('#bg-reset')?.addEventListener('click', () => {
+  bgImage = null; // 背景画像をクリアしてカメラに戻す
 });
 
 document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
