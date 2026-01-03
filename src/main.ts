@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Peer } from 'peerjs'
 
-// --- 1. UI構築 (クレジットと背景リセットを追加) ---
+// --- 1. UI構築 (2人分のクレジットを記載) ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; flex-direction: column; align-items: center; background: #f0f2f5; padding: 20px; font-family: sans-serif; overflow-y: auto;">
     <h1 style="margin-bottom: 10px; color: #333;">V-Meeting Hamster</h1>
@@ -34,10 +34,12 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
       <p id="status" style="font-size: 11px; color: #1976D2; font-weight: bold; text-align:center;">ID取得中...</p>
 
-      <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #eee;">
-        <p style="font-size: 8px; color: #999; line-height: 1.4; text-align: center;">
-          "Gas Mask Hamster" (https://skfb.ly/6RKwU) by DenisKorablyov <br>
-          is licensed under <a href="http://creativecommons.org/licenses/by/4.0/" target="_blank" style="color: #1976D2;">CC BY 4.0</a>
+      <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #eee; text-align: center;">
+        <p style="font-size: 8px; color: #999; line-height: 1.6; margin-bottom: 5px;">
+          <b>Asset Credits:</b><br>
+          "Gas Mask Hamster" by <a href="https://sketchfab.com/DenisKorablyov" target="_blank" style="color: #1976D2;">DenisKorablyov</a><br>
+          "Gas mask and helmet" by <a href="https://sketchfab.com/Chenchanchong" target="_blank" style="color: #1976D2;">Chenchanchong</a><br>
+          Licensed under <a href="http://creativecommons.org/licenses/by/4.0/" target="_blank" style="color: #1976D2;">CC BY 4.0</a>
         </p>
       </div>
     </div>
@@ -50,7 +52,7 @@ const vrmCanvas = document.querySelector<HTMLCanvasElement>('#vrm-canvas')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(35, 480 / 360, 0.1, 1000);
-camera.position.set(0, 0, 3); // ハムスターを正面から映す
+camera.position.set(0, 0, 3); 
 
 const renderer = new THREE.WebGLRenderer({ canvas: vrmCanvas, antialias: true, alpha: true });
 renderer.setClearColor(0x000000, 0); 
@@ -66,18 +68,19 @@ let localStream: MediaStream;
 let bgImage: HTMLImageElement | null = null;
 
 const loader = new GLTFLoader();
-loader.load('./hamster.glb', (gltf) => {
+// 💡 パスを「hamster.glb」として読み込み
+loader.load('hamster.glb', (gltf) => {
   hamsterModel = gltf.scene;
   hamsterModel.scale.set(0.6, 0.6, 0.6); 
   hamsterModel.position.set(0, -0.4, 0);
   scene.add(hamsterModel);
-  document.getElementById('model-status')!.innerText = "ハムスター読み込み完了";
+  document.getElementById('model-status')!.innerText = "モデル準備完了";
 }, undefined, (e) => {
   console.error(e);
-  document.getElementById('model-status')!.innerText = "読み込み失敗(publicにhamster.glbがあるか確認してください)";
+  document.getElementById('model-status')!.innerText = "モデル読み込み失敗";
 });
 
-// --- 3. 映像合成ロジック ---
+// --- 3. 映像合成・ループ (以下、共通ロジック) ---
 const finalCanvas = document.querySelector<HTMLCanvasElement>('#final-canvas')!;
 finalCanvas.width = 480;
 finalCanvas.height = 360;
@@ -85,26 +88,20 @@ const finalCtx = finalCanvas.getContext('2d')!;
 
 function compose() {
   finalCtx.clearRect(0, 0, 480, 360);
-  
-  // 背景描画
   if (bgImage) {
     finalCtx.drawImage(bgImage, 0, 0, 480, 360);
   } else {
     finalCtx.drawImage(video, 0, 0, 480, 360);
   }
-  
-  // ハムスターを少し動かして「生きてる感」を出す
   if (hamsterModel && isAvatarMode) {
     hamsterModel.rotation.y += 0.005;
     renderer.render(scene, camera);
     finalCtx.drawImage(vrmCanvas, 0, 0, 480, 360);
   }
-  
   requestAnimationFrame(compose);
 }
 compose();
 
-// --- 4. 通信 (PeerJS) ---
 const peer = new Peer();
 const processedStream = finalCanvas.captureStream(30);
 
@@ -128,7 +125,6 @@ function addRemoteVideo(stream: MediaStream, remoteId: string) {
   document.getElementById('video-grid')!.appendChild(v);
 }
 
-// --- 5. メインループ開始 ---
 navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
   localStream = stream;
   video.srcObject = stream;
@@ -136,7 +132,7 @@ navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream =>
   stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
 });
 
-// --- 6. イベント設定 ---
+// イベント設定
 document.querySelector('#bg-upload')?.addEventListener('change', (e: any) => {
   const file = e.target.files[0];
   if (file) {
@@ -147,26 +143,22 @@ document.querySelector('#bg-upload')?.addEventListener('change', (e: any) => {
   }
 });
 document.querySelector('#bg-reset')?.addEventListener('click', () => { bgImage = null; });
-
 document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
   isAvatarMode = !isAvatarMode;
   const btn = document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!;
-  btn.innerText = isAvatarMode ? "👤 ハムスター: ON" : "👤 ハムスター: OFF";
+  btn.innerText = isAvatarMode ? "👤 アバター: ON" : "👤 アバター: OFF";
   btn.style.background = isAvatarMode ? "#646cff" : "#555";
 });
-
 document.querySelector('#mic-btn')?.addEventListener('click', () => {
   const track = localStream.getAudioTracks()[0];
   track.enabled = !track.enabled;
   document.querySelector<HTMLButtonElement>('#mic-btn')!.style.background = track.enabled ? "#4CAF50" : "#f44336";
 });
-
 document.querySelector('#cam-btn')?.addEventListener('click', () => {
   const track = localStream.getVideoTracks()[0];
   track.enabled = !track.enabled;
   document.querySelector<HTMLButtonElement>('#cam-btn')!.style.background = track.enabled ? "#4CAF50" : "#f44336";
 });
-
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const id = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value.trim();
   if (id) connectTo(id);
