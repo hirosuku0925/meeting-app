@@ -6,13 +6,13 @@ import * as Kalidokit from 'kalidokit';
 import { Peer, DataConnection } from 'peerjs'
 import { FaceMesh } from '@mediapipe/face_mesh'
 
-// --- 1. UI構築 (Scratch風レイヤー構造) ---
+// --- 1. UI構築 ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; flex-direction: column; align-items: center; background: #f0f2f5; padding: 20px; font-family: sans-serif; overflow-y: auto;">
-    <h1 style="margin-bottom: 10px;">キツネ会議室</h1>
+    <h1 style="margin-bottom: 10px;">マルチ会議室 (VRM対応版)</h1>
     
     <div style="position: relative; width: 480px; height: 360px; background: #000; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.3); flex-shrink: 0;">
-      <video id="hidden-video" style="width: 100%; height: 100%; object-fit: cover; background-position: center;" autoplay playsinline muted></video>
+      <video id="hidden-video" style="width: 100%; height: 100%; object-fit: cover;" autoplay playsinline muted></video>
       <canvas id="local-canvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;"></canvas>
     </div>
 
@@ -46,10 +46,10 @@ const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(35, 480 / 360, 0.1, 1000);
-camera.position.set(0, 1.45, 0.65); // 顔の高さに固定
+camera.position.set(0, 1.45, 0.65); 
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-renderer.setClearColor(0x000000, 0); // 完全に透過
+renderer.setClearColor(0x000000, 0); 
 renderer.setSize(480, 360);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
@@ -65,36 +65,35 @@ const loader = new GLTFLoader();
 loader.register((parser) => new VRMLoaderPlugin(parser));
 loader.load('./キツネの顔.vrm', (gltf) => {
   const vrm = gltf.userData.vrm;
-  VRMUtils.rotateVRM0(vrm); // 正しくVRMUtilsを使用
+  VRMUtils.rotateVRM0(vrm); 
   scene.add(vrm.scene);
   currentVrm = vrm;
   document.getElementById('vrm-status')!.innerText = "アバター準備完了";
 });
 
-// --- 3. 顔認識と動きの補正 (上下反転の修正) ---
+// --- 3. 顔認識・追従 ---
 const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
 faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
 
 faceMesh.onResults((res) => {
   if (currentVrm && isAvatarMode && res.multiFaceLandmarks?.[0]) {
-    const riggedFace = Kalidokit.Face.solve(res.multiFaceLandmarks[0], { 
-      runtime: 'mediapipe', 
-      video: video 
-    });
+    const landmarks = res.multiFaceLandmarks[0];
+    const riggedFace = Kalidokit.Face.solve(landmarks, { runtime: 'mediapipe', video: video });
     
     if (riggedFace) {
       const head = currentVrm.humanoid.getRawBoneNode('head');
       const neck = currentVrm.humanoid.getRawBoneNode('neck');
       if (head && neck) {
-        // 💡 左右の追従強化
         head.rotation.y = riggedFace.head.y * 1.5;
         neck.rotation.y = riggedFace.head.y * 0.3;
-        
-        // 💡 上下反転の修正 (マイナスを付けて正転させる)
-        head.rotation.x = -riggedFace.head.x; 
-        
+        head.rotation.x = riggedFace.head.x; // 正転
         head.rotation.z = riggedFace.head.z;
       }
+      // 位置追従
+      const nose = landmarks[1];
+      currentVrm.scene.position.x = -(nose.x - 0.5) * 0.55; 
+      currentVrm.scene.position.y = -(nose.y - 0.5) * 0.45;
+
       currentVrm.expressionManager?.setValue('blink', 1 - riggedFace.eye.l);
       currentVrm.expressionManager?.setValue('aa', riggedFace.mouth.shape.A * 1.5);
     }
@@ -103,10 +102,25 @@ faceMesh.onResults((res) => {
   renderer.render(scene, camera);
 });
 
-// --- 4. PeerJS 通信 ---
+// --- 4. 映像合成ロジック (黒背景対策) ---
+const sendCanvas = document.createElement('canvas');
+sendCanvas.width = 480;
+sendCanvas.height = 360;
+const sendCtx = sendCanvas.getContext('2d')!;
+
+function compose() {
+  // 1. ビデオ（実写）を描く
+  sendCtx.drawImage(video, 0, 0, 480, 360);
+  // 2. アバター（透過Canvas）を上に重ねる
+  sendCtx.drawImage(canvas, 0, 0, 480, 360);
+  requestAnimationFrame(compose);
+}
+compose();
+
 const peer = new Peer();
 const connections: Map<string, DataConnection> = new Map();
-let processedStream = canvas.captureStream(30);
+// 💡 合成したCanvasからストリームを作成
+let processedStream = sendCanvas.captureStream(30);
 
 peer.on('open', (id) => document.getElementById('status')!.innerText = `あなたのID: ${id}`);
 
@@ -144,20 +158,21 @@ function addRemoteVideo(stream: MediaStream, remoteId: string) {
   document.getElementById('video-grid')!.appendChild(div);
 }
 
-// --- 5. カメラ・メインループ ---
+// --- 5. メインループ開始 ---
 navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
   localStream = stream;
   video.srcObject = stream;
   video.play();
+  stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
+
   const loop = async () => {
     if (video.readyState >= 2) await faceMesh.send({ image: video });
     requestAnimationFrame(loop);
   };
   loop();
-  stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
 });
 
-// --- 6. イベント設定 ---
+// --- 6. ボタンイベント ---
 document.querySelector('#mic-btn')?.addEventListener('click', () => {
   const track = localStream.getAudioTracks()[0];
   track.enabled = !track.enabled;
