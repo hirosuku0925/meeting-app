@@ -60,7 +60,7 @@ scene.add(light, new THREE.AmbientLight(0xffffff, 0.8));
 let currentVrm: VRM | null = null;
 let isAvatarMode = true;
 let localStream: MediaStream;
-let bgImage: HTMLImageElement | null = null; // 💡 追加：背景画像保持用
+let bgImage: HTMLImageElement | null = null;
 
 const loader = new GLTFLoader();
 loader.register((parser) => new VRMLoaderPlugin(parser));
@@ -72,7 +72,7 @@ loader.load('./キツネの顔.vrm', (gltf) => {
   document.getElementById('vrm-status')!.innerText = "アバター準備完了";
 });
 
-// --- 3. 顔認識・追従ロジック ---
+// --- 3. 顔認識 ---
 const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
 faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
 
@@ -83,17 +83,14 @@ faceMesh.onResults((res) => {
     
     if (riggedFace) {
       const head = currentVrm.humanoid.getRawBoneNode('head');
-      const neck = currentVrm.humanoid.getRawBoneNode('neck');
-      if (head && neck) {
+      if (head) {
         head.rotation.y = riggedFace.head.y * 1.5;
-        neck.rotation.y = riggedFace.head.y * 0.3;
         head.rotation.x = riggedFace.head.x;
         head.rotation.z = riggedFace.head.z;
       }
       const nose = landmarks[1];
       currentVrm.scene.position.x = -(nose.x - 0.5) * 0.55; 
       currentVrm.scene.position.y = -(nose.y - 0.5) * 0.45;
-
       currentVrm.expressionManager?.setValue('blink', 1 - riggedFace.eye.l);
       currentVrm.expressionManager?.setValue('aa', riggedFace.mouth.shape.A * 1.5);
     }
@@ -102,25 +99,26 @@ faceMesh.onResults((res) => {
   renderer.render(scene, camera);
 });
 
-// --- 4. 💡 映像合成ロジック (黒背景＆画像反映対策) ---
+// --- 4. 映像合成ロジック (黒画面対策 & 背景のみ対応) ---
 const sendCanvas = document.createElement('canvas');
 sendCanvas.width = 480;
 sendCanvas.height = 360;
 const sendCtx = sendCanvas.getContext('2d')!;
 
 function compose() {
-  // ① 背景をクリア
   sendCtx.clearRect(0, 0, 480, 360);
   
-  // ② 💡 背景画像がある場合は画像を描画、なければビデオを描画
+  // ① 背景画像があれば描画、なければカメラ映像を描画
   if (bgImage) {
     sendCtx.drawImage(bgImage, 0, 0, 480, 360);
   } else {
     sendCtx.drawImage(video, 0, 0, 480, 360);
   }
   
-  // ③ その上にアバターを描画
-  sendCtx.drawImage(canvas, 0, 0, 480, 360);
+  // ② アバターがONなら上にアバターを重ねる
+  if (isAvatarMode) {
+    sendCtx.drawImage(canvas, 0, 0, 480, 360);
+  }
   
   requestAnimationFrame(compose);
 }
@@ -132,39 +130,27 @@ let processedStream = sendCanvas.captureStream(30);
 
 peer.on('open', (id) => document.getElementById('status')!.innerText = `あなたのID: ${id}`);
 
-// --- 通信関連 (setupConnection, connectTo, addRemoteVideo) は以前と同じ ---
-function setupConnection(conn: DataConnection) {
-  if (connections.has(conn.peer)) return;
+// --- 通信処理 ---
+peer.on('connection', (conn) => {
   connections.set(conn.peer, conn);
-  conn.on('close', () => {
-    connections.delete(conn.peer);
-    document.getElementById(`remote-${conn.peer}`)?.remove();
-  });
-}
-
-function connectTo(id: string) {
-  if (connections.has(id) || id === peer.id) return;
-  const conn = peer.connect(id);
-  setupConnection(conn);
-  const call = peer.call(id, processedStream);
-  call.on('stream', (s) => addRemoteVideo(s, id));
-}
-
-peer.on('connection', setupConnection);
+});
 peer.on('call', (call) => {
   call.answer(processedStream);
   call.on('stream', (s) => addRemoteVideo(s, call.peer));
 });
 
+function connectTo(id: string) {
+  const call = peer.call(id, processedStream);
+  call.on('stream', (s) => addRemoteVideo(s, id));
+}
+
 function addRemoteVideo(stream: MediaStream, remoteId: string) {
   if (document.getElementById(`remote-${remoteId}`)) return;
-  const div = document.createElement('div');
-  div.id = `remote-${remoteId}`;
   const v = document.createElement('video');
+  v.id = `remote-${remoteId}`;
   v.style.width = "200px"; v.style.borderRadius = "10px"; v.autoplay = true; v.playsInline = true;
   v.srcObject = stream;
-  div.appendChild(v);
-  document.getElementById('video-grid')!.appendChild(div);
+  document.getElementById('video-grid')!.appendChild(v);
 }
 
 // --- 5. メインループ ---
@@ -180,24 +166,26 @@ navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream =>
   loop();
 });
 
-// --- 6. 💡 背景画像選択の修正 ---
+// --- 6. イベント設定 ---
 document.querySelector('#bg-upload')?.addEventListener('change', (e: any) => {
   const file = e.target.files[0];
   if (file) {
     const url = URL.createObjectURL(file);
-    // 画面表示用のビデオ背景も変更
     video.style.backgroundImage = `url(${url})`;
     video.style.backgroundSize = "cover";
-    video.style.backgroundColor = "transparent";
-    
-    // 💡 合成用に画像オブジェクトを作成
     const img = new Image();
     img.onload = () => { bgImage = img; };
     img.src = url;
   }
 });
 
-// その他のボタンイベント
+document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
+  isAvatarMode = !isAvatarMode;
+  const btn = document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!;
+  btn.innerText = isAvatarMode ? "👤 アバター: ON" : "👤 アバター: OFF";
+  btn.style.background = isAvatarMode ? "#646cff" : "#555";
+});
+
 document.querySelector('#mic-btn')?.addEventListener('click', () => {
   const track = localStream.getAudioTracks()[0];
   track.enabled = !track.enabled;
@@ -207,10 +195,6 @@ document.querySelector('#cam-btn')?.addEventListener('click', () => {
   const track = localStream.getVideoTracks()[0];
   track.enabled = !track.enabled;
   document.querySelector<HTMLButtonElement>('#cam-btn')!.style.background = track.enabled ? "#4CAF50" : "#f44336";
-});
-document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
-  isAvatarMode = !isAvatarMode;
-  document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!.style.background = isAvatarMode ? "#646cff" : "#555";
 });
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const id = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value.trim();
