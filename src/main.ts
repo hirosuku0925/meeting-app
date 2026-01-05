@@ -1,55 +1,33 @@
 import './style.css'
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { VRM, VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { FaceMesh } from '@mediapipe/face_mesh';
 import { Peer } from 'peerjs';
 
-// --- 1. UI構築 (これまでのボタン＋クレジット) ---
+// --- 1. UI構築 ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; flex-direction: column; align-items: center; background: #f0f2f5; padding: 20px; overflow-y: auto;">
-    <h1 style="color: #333; margin-bottom: 10px;">V-Meeting: Emoji & Hamster</h1>
-    
+    <h1 style="color: #333; margin-bottom: 10px;">V-Meeting: Emoji Mask</h1>
     <div style="position: relative; width: 480px; height: 360px; background: #000; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.3); flex-shrink: 0;">
       <canvas id="local-canvas" style="width: 100%; height: 100%; object-fit: cover;"></canvas>
       <video id="hidden-video" style="display:none;" autoplay playsinline muted></video>
-      <canvas id="vrm-canvas" style="display:none;"></canvas>
     </div>
-
     <div class="card" style="margin-top: 20px; background: white; padding: 20px; border-radius: 16px; width: 440px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
-      <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-bottom: 15px;">
+      <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">
         <button id="mic-btn" style="background: #4CAF50; color: white; border: none; padding: 10px 15px; border-radius: 8px; cursor: pointer;">🎤 ON</button>
         <button id="cam-btn" style="background: #4CAF50; color: white; border: none; padding: 10px 15px; border-radius: 8px; cursor: pointer;">📷 ON</button>
-        <button id="avatar-mode-btn" style="background: #646cff; color: white; border: none; padding: 10px 15px; border-radius: 8px; cursor: pointer;">👤 アバター: ON</button>
       </div>
-
-      <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+      <div style="display: flex; gap: 8px; margin-top: 15px;">
         <input id="remote-id-input" placeholder="相手のIDを入力" style="flex: 2; padding: 8px; border-radius: 5px; border: 1px solid #ddd;">
         <button id="connect-btn" style="flex: 1; background: #646cff; color: white; border: none; border-radius: 5px; cursor: pointer;">入室</button>
       </div>
-      <p id="status" style="font-size: 11px; color: #1976D2; font-weight: bold; text-align:center;">ID取得中...</p>
-
-      <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #eee; text-align: center;">
-        <p style="font-size: 8px; color: #999; line-height: 1.6;">
-          <b>Credits:</b><br>
-          3D Model: "Gas mask and helmet" by Chenchanchong (CC BY 4.0)<br>
-          BGM: 鉄道ビジネスカジュアルチャンネル (https://www.youtube.com/@heitetsu4649)
-        </p>
-      </div>
+      <p id="status" style="font-size: 11px; color: #1976D2; font-weight: bold; text-align:center; margin-top: 10px;">ID取得中...</p>
     </div>
     <div id="video-grid" style="display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap; justify-content: center;"></div>
   </div>
 `;
 
-// --- 2. 状態管理 ---
-let isAvatarMode = true;
-let isCamOn = true;
-let isMicOn = true;
-let currentVrm: VRM | null = null;
-let lastEmojiTime = 0;
-let localStream: MediaStream;
-
-// --- 3. 3Dシーン設定 ---
+// --- 2. 3D設定 & 絵文字マスク ---
 const canvas = document.querySelector('#local-canvas') as HTMLCanvasElement;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(30, 480 / 360, 0.1, 20.0);
@@ -57,77 +35,53 @@ camera.position.set(0, 1.4, 1.5);
 
 const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
 renderer.setSize(480, 360);
-scene.add(new THREE.DirectionalLight(0xffffff, Math.PI), new THREE.AmbientLight(0xffffff, 0.5));
+scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
-// --- 4. 絵文字システム ---
-const emojis: THREE.Sprite[] = [];
-function spawnEmoji(type: string) {
-  const texture = new THREE.TextureLoader().load(`https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/${type}.png`);
-  const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
-  const sprite = new THREE.Sprite(material);
-  sprite.position.set((Math.random() - 0.5) * 0.3, 1.6, 0.5);
-  sprite.scale.set(0.15, 0.15, 0.15);
-  scene.add(sprite);
-  emojis.push(sprite);
-  setTimeout(() => {
-    scene.remove(sprite);
-    const idx = emojis.indexOf(sprite);
-    if (idx > -1) emojis.splice(idx, 1);
-  }, 2000);
-}
+const emojiTexture = new THREE.TextureLoader().load('https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f604.png');
+const emojiMaterial = new THREE.SpriteMaterial({ map: emojiTexture, transparent: true, opacity: 0 });
+const emojiMask = new THREE.Sprite(emojiMaterial);
+emojiMask.scale.set(0.3, 0.3, 0.3);
+scene.add(emojiMask);
 
-// --- 5. モデル読み込み (VRM/GLB対応) ---
+// --- 3. モデル読み込み ---
+let currentModel: THREE.Object3D | null = null;
 const loader = new GLTFLoader();
-loader.register((parser) => new VRMLoaderPlugin(parser));
 const baseUrl = import.meta.env.BASE_URL || '/';
-const modelPath = `${baseUrl}gas_mask_and_helmet.glb`.replace(/\/+/g, '/');
+loader.load(`${baseUrl}gas_mask_and_helmet.glb`, (gltf) => {
+  currentModel = gltf.scene;
+  scene.add(currentModel);
+  currentModel.rotation.y = Math.PI;
+});
 
-loader.load(modelPath, (gltf) => {
-  currentVrm = gltf.userData.vrm || null;
-  const modelScene = currentVrm ? currentVrm.scene : gltf.scene;
-  scene.add(modelScene);
-  modelScene.rotation.y = Math.PI;
-}, undefined, (e) => console.error("Load Error:", e));
-
-// --- 6. フェイストラッキング & 表情解析 ---
+// --- 4. 顔トラッキング ---
 const video = document.querySelector('#hidden-video') as HTMLVideoElement;
 const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
 faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
 
 faceMesh.onResults((res) => {
-  if (currentVrm) currentVrm.scene.visible = (isAvatarMode && isCamOn);
-
-  if (isCamOn && isAvatarMode && res.multiFaceLandmarks?.[0]) {
+  if (res.multiFaceLandmarks?.[0]) {
     const s = res.multiFaceLandmarks[0];
-    
-    // 笑い判定: 口角(61, 291)の距離
+    if (currentModel) {
+      currentModel.position.set((0.5 - s[1].x) * 1.5, (0.5 - s[1].y) * 1.2, 0);
+      currentModel.rotation.y = (s[234].x - s[454].x) * 0.5 + Math.PI;
+      currentModel.rotation.x = (s[10].y - s[152].y) * 0.5;
+    }
+    emojiMask.position.set(currentModel?.position.x || 0, (currentModel?.position.y || 1.4) + 0.1, 0.6);
     const mouthW = Math.hypot(s[61].x - s[291].x, s[61].y - s[291].y);
-    if (mouthW > 0.085 && Date.now() - lastEmojiTime > 500) {
-      spawnEmoji('1f604'); // 😄
-      lastEmojiTime = Date.now();
-    }
-
-    // アバターの首振り
-    const headNode = currentVrm?.humanoid?.getRawBoneNode('head') || scene.children.find(c => c.type === "Group");
-    if (headNode) {
-      headNode.rotation.y = (s[234].x - s[454].x) * 0.5;
-      headNode.rotation.x = (s[10].y - s[152].y) * 0.5;
-    }
-    if (currentVrm) currentVrm.update(1/30);
+    emojiMaterial.opacity = mouthW > 0.085 ? 1.0 : 0.0;
   }
-
-  // 絵文字アニメーション
-  emojis.forEach(e => { e.position.y += 0.01; e.material.opacity -= 0.01; });
   renderer.render(scene, camera);
 });
 
-// --- 7. 通信 (PeerJS) ---
+// --- 5. 通信 (PeerJS) エラー修正箇所 ---
 const peer = new Peer();
-const processedStream = canvas.captureStream(30);
+const processedStream = canvas.captureStream(30); // 💡 これが「未使用」だった変数
+
 peer.on('open', (id) => (document.querySelector('#status') as HTMLElement).innerText = `ID: ${id}`);
 
+// 相手から電話が来た時
 peer.on('call', (call) => {
-  call.answer(processedStream);
+  call.answer(processedStream); // 💡 ここで使うことで警告が消えます
   call.on('stream', (s) => addRemoteVideo(s, call.peer));
 });
 
@@ -140,34 +94,24 @@ function addRemoteVideo(stream: MediaStream, remoteId: string) {
   document.getElementById('video-grid')!.appendChild(v);
 }
 
-// --- 8. メイン開始 ---
-navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
-  localStream = stream;
-  video.srcObject = stream;
-  stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
-  video.onloadedmetadata = () => {
-    video.play();
-    const loop = async () => { if (isCamOn) await faceMesh.send({ image: video }); requestAnimationFrame(loop); };
-    loop();
-  };
-});
-
-// --- 9. ボタン操作 ---
-document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
-  isAvatarMode = !isAvatarMode;
-  document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!.style.background = isAvatarMode ? "#646cff" : "#555";
-});
-
-document.querySelector('#mic-btn')?.addEventListener('click', () => {
-  isMicOn = !isMicOn;
-  localStream.getAudioTracks().forEach(t => t.enabled = isMicOn);
-  document.querySelector<HTMLButtonElement>('#mic-btn')!.style.background = isMicOn ? "#4CAF50" : "#f44336";
-});
-
+// 自分から電話をかける時
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const id = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value.trim();
   if (id) {
-    const call = peer.call(id, processedStream);
+    const call = peer.call(id, processedStream); // 💡 ここでも使う
     call.on('stream', (s) => addRemoteVideo(s, id));
   }
+});
+
+// カメラ開始
+navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
+  video.srcObject = stream;
+  // 音声トラックを加工ストリームに合流させる
+  stream.getAudioTracks().forEach(track => processedStream.addTrack(track));
+  
+  video.onloadedmetadata = () => {
+    video.play();
+    const loop = async () => { await faceMesh.send({ image: video }); requestAnimationFrame(loop); };
+    loop();
+  };
 });
