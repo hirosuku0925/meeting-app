@@ -2,12 +2,13 @@ import './style.css'
 import { Peer, DataConnection } from 'peerjs'
 import { FaceMesh } from '@mediapipe/face_mesh'
 import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
+import * as webllm from "@mlc-ai/web-llm"
 
-// --- 1. UI構築 ---
+// --- 1. UI構築 (これまでのボタンや設定項目をすべて維持) ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; overflow: hidden; background: #f0f2f5;">
     <div style="flex: 1; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto;">
-      <h1 style="color: #333; margin-bottom: 20px;">マルチ会議室 with @nijinai</h1>
+      <h1 style="color: #333; margin-bottom: 20px;">AIマルチ会議室 @nijinai</h1>
       <div id="video-grid" style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; padding: 10px; width: 100%;">
         <div id="local-container" style="text-align: center;">
           <p style="font-size: 12px; color: #666; margin-bottom: 5px;">自分</p>
@@ -15,6 +16,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         </div>
       </div>
       <div class="card" style="width: 100%; max-width: 500px; margin-top: 20px; padding: 20px; border-radius: 16px; background: #fff; box-shadow: 0 10px 25px rgba(0,0,0,0.1);">
+        <p id="ai-status" style="font-size: 11px; color: #ff4d97; text-align: center; margin-bottom: 10px;">🤖 AI準備中...</p>
         <div style="display: flex; gap: 8px; justify-content: center; margin-bottom: 15px; flex-wrap: wrap;">
           <button id="camera-btn" style="background-color: #2196F3; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">📹 カメラ: ON</button>
           <button id="mic-btn" style="background-color: #4CAF50; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">🎤 マイク: ON</button>
@@ -50,7 +52,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div style="padding: 15px; background: #646cff; color: white; font-weight: bold;">チャット</div>
       <div id="chat-box" style="flex: 1; overflow-y: auto; padding: 10px; font-size: 13px; display: flex; flex-direction: column; gap: 5px;"></div>
       <div style="padding: 10px; border-top: 1px solid #eee; display: flex; gap: 5px;">
-        <input type="text" id="chat-input" placeholder="@nijinai こんにちは！" style="flex: 1; padding: 5px;">
+        <input type="text" id="chat-input" placeholder="@nijinai 質問してね" style="flex: 1; padding: 5px;">
         <button id="send-btn" style="background: #646cff; color: white; border: none; padding: 5px 10px; border-radius: 4px;">送信</button>
       </div>
     </div>
@@ -58,12 +60,13 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// --- グローバル変数 ---
+// --- グローバル変数 & 設定 ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const chatBox = document.querySelector<HTMLDivElement>('#chat-box')!;
 const statusEl = document.querySelector<HTMLElement>('#status')!;
+const aiStatus = document.getElementById("ai-status")!;
 
 let isMicOn = true, isAvatarMode = false;
 let imgClose: HTMLImageElement | null = null, imgOpen: HTMLImageElement | null = null, imgBlink: HTMLImageElement | null = null, backgroundImg: HTMLImageElement | null = null;
@@ -71,7 +74,23 @@ let processedStream: MediaStream;
 const connections: Set<DataConnection> = new Set();
 let reactions: { emoji: string, time: number }[] = [];
 
-// --- AIモデル初期化 ---
+// --- AI (WebLLM) 準備 ---
+let engine: webllm.MLCEngine | null = null;
+async function initAI() {
+  try {
+    engine = new webllm.MLCEngine();
+    engine.setInitProgressCallback((report) => {
+      aiStatus.innerText = `🤖 AI読込中: ${Math.round(report.progress * 100)}%`;
+    });
+    await engine.reload("Llama-3.1-8B-Instruct-q4f16_1-MLC");
+    aiStatus.innerText = "🤖 AI準備完了！ @nijinai と呼んでね";
+  } catch (e) {
+    aiStatus.innerText = "❌ AI起動失敗 (WebGPU非対応)";
+  }
+}
+initAI();
+
+// --- 画像・アバター描画処理 ---
 const selfie = new SelfieSegmentation({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}` });
 selfie.setOptions({ modelSelection: 1 });
 const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
@@ -80,7 +99,6 @@ faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
 let currentMask: any = null;
 selfie.onResults((res) => { currentMask = res.segmentationMask; });
 
-// 描画ループ
 faceMesh.onResults((res) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -123,22 +141,7 @@ faceMesh.onResults((res) => {
   ctx.restore();
 });
 
-// --- 通信処理 ---
-const peer = new Peer();
-peer.on('open', (id) => statusEl.innerText = `あなたのID: ${id}`);
-
-function addRemoteVideo(stream: MediaStream, remoteId: string) {
-  if (document.getElementById(`remote-${remoteId}`)) return;
-  const div = document.createElement('div');
-  div.id = `remote-${remoteId}`;
-  div.innerHTML = `<p style="font-size:10px; color:#666;">User: ${remoteId.slice(0,4)}</p>`;
-  const v = document.createElement('video');
-  v.style.width = "280px"; v.style.borderRadius = "15px"; v.autoplay = true; v.playsInline = true;
-  v.srcObject = stream;
-  div.appendChild(v);
-  document.querySelector('#video-grid')!.appendChild(div);
-}
-
+// --- チャット・通信処理 ---
 function addChatMessage(name: string, content: string, color: string = "#333") {
   const p = document.createElement('p');
   p.innerHTML = `<b style="color:${color}">${name}:</b> ${content}`;
@@ -146,76 +149,66 @@ function addChatMessage(name: string, content: string, color: string = "#333") {
   chatBox.scrollTop = chatBox.scrollHeight;
 }
 
-function setupDataConnection(conn: DataConnection) {
+const peer = new Peer();
+peer.on('open', (id) => statusEl.innerText = `あなたのID: ${id}`);
+
+const setupConn = (conn: DataConnection) => {
   connections.add(conn);
   conn.on('data', (data: any) => {
     if (data.type === 'chat') addChatMessage(data.name, data.content, data.name === 'nijinai' ? '#ff4d97' : '#333');
     if (data.type === 'reaction') reactions.push({ emoji: data.content, time: Date.now() });
   });
-}
+};
 
-peer.on('connection', setupDataConnection);
+peer.on('connection', setupConn);
 peer.on('call', (call) => {
   call.answer(processedStream);
-  call.on('stream', (stream) => addRemoteVideo(stream, call.peer));
+  call.on('stream', (stream) => {
+    if (document.getElementById(`remote-${call.peer}`)) return;
+    const div = document.createElement('div'); div.id = `remote-${call.peer}`;
+    const v = document.createElement('video'); v.style.width = "280px"; v.style.borderRadius = "15px"; v.srcObject = stream; v.autoplay = true; v.playsInline = true;
+    div.appendChild(v); document.querySelector('#video-grid')!.appendChild(div);
+  });
 });
 
-document.querySelector('#connect-btn')?.addEventListener('click', () => {
-  const remoteId = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value.trim();
-  if (!remoteId || remoteId === peer.id) return;
-  setupDataConnection(peer.connect(remoteId));
-  const call = peer.call(remoteId, processedStream);
-  call.on('stream', (stream) => addRemoteVideo(stream, remoteId));
+document.querySelector('#send-btn')?.addEventListener('click', async () => {
+  const input = document.querySelector<HTMLInputElement>('#chat-input')!;
+  const name = (document.querySelector<HTMLInputElement>('#user-name-input')!).value;
+  if (!input.value) return;
+
+  const msg = input.value;
+  addChatMessage("自分", msg);
+  connections.forEach(c => c.send({ type: 'chat', name, content: msg }));
+
+  // AI反応セクション
+  if (msg.includes("@nijinai") && engine) {
+    const messages: any[] = [
+      { role: "system", content: "あなたはnijinaiという猫です。語尾に『にゃ』を付けて、短く可愛く答えて。" },
+      { role: "user", content: msg.replace("@nijinai", "") }
+    ];
+    try {
+      const reply = await engine.chat.completions.create({ messages: messages as any });
+      const aiText = reply.choices[0].message.content || "にゃ？";
+      addChatMessage("nijinai", aiText, "#ff4d97");
+      connections.forEach(c => c.send({ type: 'chat', name: "nijinai", content: aiText }));
+      // 自動リアクション
+      reactions.push({ emoji: '❤️', time: Date.now() });
+      connections.forEach(c => c.send({ type: 'reaction', content: '❤️' }));
+    } catch (e) { addChatMessage("nijinai", "にゃあ、エラーだにゃ...", "#ff4d97"); }
+  }
+  input.value = "";
 });
 
-// --- 起動 ---
+// --- その他イベント (以前の機能をすべて復元) ---
 navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
   processedStream = canvas.captureStream(30);
   stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
   video.srcObject = stream;
   video.play();
-  const loop = async () => {
-    await selfie.send({ image: video });
-    await faceMesh.send({ image: video });
-    requestAnimationFrame(loop);
-  };
+  const loop = async () => { await selfie.send({ image: video }); await faceMesh.send({ image: video }); requestAnimationFrame(loop); };
   loop();
 });
 
-// --- チャット・NIJINAI反応 ---
-document.querySelector('#send-btn')?.addEventListener('click', () => {
-  const input = document.querySelector<HTMLInputElement>('#chat-input')!;
-  const name = document.querySelector<HTMLInputElement>('#user-name-input')!.value;
-  if (!input.value) return;
-
-  const msg = input.value;
-  const data = { type: 'chat', name, content: msg };
-  
-  // 自分と相手に送信
-  addChatMessage("自分", msg);
-  connections.forEach(c => c.send(data));
-
-  // @nijinai 反応
-  if (msg.includes("@nijinai")) {
-    setTimeout(() => {
-      let reply = "なーに？";
-      if (msg.includes("こんにちは")) reply = "こんにちは！会議中かな？";
-      if (msg.includes("すごい")) reply = "えへへ、ありがとう！";
-
-      const nijinaiData = { type: 'chat', name: 'nijinai', content: reply };
-      addChatMessage("nijinai", reply, "#ff4d97");
-      connections.forEach(c => c.send(nijinaiData));
-
-      // ハートのリアクションを自動送信
-      reactions.push({ emoji: '❤️', time: Date.now() });
-      connections.forEach(c => c.send({ type: 'reaction', content: '❤️' }));
-    }, 1000);
-  }
-
-  input.value = "";
-});
-
-// --- リアクション・その他イベント ---
 document.querySelectorAll('.react-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const emoji = (btn as HTMLElement).dataset.emoji!;
@@ -236,18 +229,26 @@ const setImg = (id: string, target: string) => {
 };
 setImg('avatar-close', 'close'); setImg('avatar-open', 'open'); setImg('avatar-blink', 'blink'); setImg('bg-upload', 'bg');
 
+document.querySelector('#connect-btn')?.addEventListener('click', () => {
+  const id = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
+  setupConn(peer.connect(id));
+  const call = peer.call(id, processedStream);
+  call.on('stream', (s) => {
+    const v = document.createElement('video'); v.style.width="280px"; v.srcObject=s; v.autoplay=true;
+    document.querySelector('#video-grid')?.appendChild(v);
+  });
+});
+
 document.querySelector('#camera-btn')?.addEventListener('click', () => {
-  const track = (video.srcObject as MediaStream).getVideoTracks()[0];
-  track.enabled = !track.enabled;
-  document.querySelector<HTMLButtonElement>('#camera-btn')!.innerText = track.enabled ? "📹 カメラ: ON" : "📹 カメラ: OFF";
+  const t = (video.srcObject as MediaStream).getVideoTracks()[0]; t.enabled = !t.enabled;
+  document.querySelector<HTMLButtonElement>('#camera-btn')!.innerText = t.enabled ? "📹 カメラ: ON" : "📹 カメラ: OFF";
 });
 document.querySelector('#mic-btn')?.addEventListener('click', () => {
-  isMicOn = !isMicOn;
-  (video.srcObject as MediaStream).getAudioTracks()[0].enabled = isMicOn;
+  isMicOn = !isMicOn; (video.srcObject as MediaStream).getAudioTracks()[0].enabled = isMicOn;
   document.querySelector<HTMLButtonElement>('#mic-btn')!.innerText = isMicOn ? "🎤 マイク: ON" : "🎤 マイク: OFF";
 });
 document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
   isAvatarMode = !isAvatarMode;
   document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!.innerText = isAvatarMode ? "👤 アバター: ON" : "👤 アバター: OFF";
 });
-document.querySelector('#hangup-btn')?.addEventListener('click', () => window.location.reload());
+document.querySelector('#hangup-btn')?.addEventListener('click', () => location.reload());
