@@ -3,10 +3,11 @@ import { Peer, DataConnection } from 'peerjs'
 import { FaceMesh } from '@mediapipe/face_mesh'
 import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 
+// --- 1. UI構築 ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; overflow: hidden; background: #f0f2f5;">
     <div style="flex: 1; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto;">
-      <h1 style="color: #333; margin-bottom: 20px;">マルチ会議室</h1>
+      <h1 style="color: #333; margin-bottom: 20px;">マルチ会議室 with @nijinai</h1>
       <div id="video-grid" style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; padding: 10px; width: 100%;">
         <div id="local-container" style="text-align: center;">
           <p style="font-size: 12px; color: #666; margin-bottom: 5px;">自分</p>
@@ -49,7 +50,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div style="padding: 15px; background: #646cff; color: white; font-weight: bold;">チャット</div>
       <div id="chat-box" style="flex: 1; overflow-y: auto; padding: 10px; font-size: 13px; display: flex; flex-direction: column; gap: 5px;"></div>
       <div style="padding: 10px; border-top: 1px solid #eee; display: flex; gap: 5px;">
-        <input type="text" id="chat-input" placeholder="..." style="flex: 1; padding: 5px;">
+        <input type="text" id="chat-input" placeholder="@nijinai こんにちは！" style="flex: 1; padding: 5px;">
         <button id="send-btn" style="background: #646cff; color: white; border: none; padding: 5px 10px; border-radius: 4px;">送信</button>
       </div>
     </div>
@@ -57,7 +58,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// --- グローバル設定 ---
+// --- グローバル変数 ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
@@ -70,7 +71,7 @@ let processedStream: MediaStream;
 const connections: Set<DataConnection> = new Set();
 let reactions: { emoji: string, time: number }[] = [];
 
-// AI描画エンジン
+// --- AIモデル初期化 ---
 const selfie = new SelfieSegmentation({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}` });
 selfie.setOptions({ modelSelection: 1 });
 const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
@@ -79,6 +80,7 @@ faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
 let currentMask: any = null;
 selfie.onResults((res) => { currentMask = res.segmentationMask; });
 
+// 描画ループ
 faceMesh.onResults((res) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -121,7 +123,7 @@ faceMesh.onResults((res) => {
   ctx.restore();
 });
 
-// 通信処理
+// --- 通信処理 ---
 const peer = new Peer();
 peer.on('open', (id) => statusEl.innerText = `あなたのID: ${id}`);
 
@@ -137,13 +139,17 @@ function addRemoteVideo(stream: MediaStream, remoteId: string) {
   document.querySelector('#video-grid')!.appendChild(div);
 }
 
+function addChatMessage(name: string, content: string, color: string = "#333") {
+  const p = document.createElement('p');
+  p.innerHTML = `<b style="color:${color}">${name}:</b> ${content}`;
+  chatBox.appendChild(p);
+  chatBox.scrollTop = chatBox.scrollHeight;
+}
+
 function setupDataConnection(conn: DataConnection) {
   connections.add(conn);
   conn.on('data', (data: any) => {
-    if (data.type === 'chat') {
-      const p = document.createElement('p'); p.innerText = `${data.name}: ${data.content}`;
-      chatBox.appendChild(p); chatBox.scrollTop = chatBox.scrollHeight;
-    }
+    if (data.type === 'chat') addChatMessage(data.name, data.content, data.name === 'nijinai' ? '#ff4d97' : '#333');
     if (data.type === 'reaction') reactions.push({ emoji: data.content, time: Date.now() });
   });
 }
@@ -162,7 +168,7 @@ document.querySelector('#connect-btn')?.addEventListener('click', () => {
   call.on('stream', (stream) => addRemoteVideo(stream, remoteId));
 });
 
-// 起動処理
+// --- 起動 ---
 navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
   processedStream = canvas.captureStream(30);
   stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
@@ -176,23 +182,46 @@ navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream =>
   loop();
 });
 
-// イベントリスナー
+// --- チャット・NIJINAI反応 ---
+document.querySelector('#send-btn')?.addEventListener('click', () => {
+  const input = document.querySelector<HTMLInputElement>('#chat-input')!;
+  const name = document.querySelector<HTMLInputElement>('#user-name-input')!.value;
+  if (!input.value) return;
+
+  const msg = input.value;
+  const data = { type: 'chat', name, content: msg };
+  
+  // 自分と相手に送信
+  addChatMessage("自分", msg);
+  connections.forEach(c => c.send(data));
+
+  // @nijinai 反応
+  if (msg.includes("@nijinai")) {
+    setTimeout(() => {
+      let reply = "なーに？";
+      if (msg.includes("こんにちは")) reply = "こんにちは！会議中かな？";
+      if (msg.includes("すごい")) reply = "えへへ、ありがとう！";
+
+      const nijinaiData = { type: 'chat', name: 'nijinai', content: reply };
+      addChatMessage("nijinai", reply, "#ff4d97");
+      connections.forEach(c => c.send(nijinaiData));
+
+      // ハートのリアクションを自動送信
+      reactions.push({ emoji: '❤️', time: Date.now() });
+      connections.forEach(c => c.send({ type: 'reaction', content: '❤️' }));
+    }, 1000);
+  }
+
+  input.value = "";
+});
+
+// --- リアクション・その他イベント ---
 document.querySelectorAll('.react-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const emoji = (btn as HTMLElement).dataset.emoji!;
     reactions.push({ emoji, time: Date.now() });
     connections.forEach(c => c.send({ type: 'reaction', content: emoji }));
   });
-});
-
-document.querySelector('#send-btn')?.addEventListener('click', () => {
-  const input = (document.querySelector<HTMLInputElement>('#chat-input')!);
-  const name = (document.querySelector<HTMLInputElement>('#user-name-input')!).value;
-  if (!input.value) return;
-  const data = { type: 'chat', name, content: input.value };
-  connections.forEach(c => c.send(data));
-  const p = document.createElement('p'); p.innerText = `自分: ${input.value}`;
-  chatBox.appendChild(p); input.value = "";
 });
 
 const setImg = (id: string, target: string) => {
