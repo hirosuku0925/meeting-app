@@ -1,7 +1,7 @@
 import './style.css'
 import { Peer, DataConnection, MediaConnection } from 'peerjs'
 import { FaceMesh } from '@mediapipe/face_mesh'
-import { SelfieSegmentation } from '@mediapipe/selfie_segmentation' // ← これを使えるようにします
+import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 import * as webllm from "@mlc-ai/web-llm"
 
 // --- 1. UI構築 ---
@@ -18,17 +18,17 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div class="card" style="width: 100%; max-width: 500px; margin-top: 20px; padding: 20px; border-radius: 16px; background: #fff; box-shadow: 0 10px 25px rgba(0,0,0,0.1);">
         <p id="ai-status" style="font-size: 11px; color: #ff4d97; text-align: center; margin-bottom: 10px;">🤖 AI準備中...</p>
         <div style="display: flex; gap: 8px; justify-content: center; margin-bottom: 15px; flex-wrap: wrap;">
-          <button id="camera-btn" style="background-color: #2196F3; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">📹 カメラ</button>
-          <button id="mic-btn" style="background-color: #4CAF50; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">🎤 マイク</button>
-          <button id="avatar-mode-btn" style="background-color: #555; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">👤 アバター</button>
+          <button id="camera-btn" style="background-color: #2196F3; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">📹 カメラ切替</button>
+          <button id="mic-btn" style="background-color: #4CAF50; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">🎤 マイク切替</button>
+          <button id="avatar-mode-btn" style="background-color: #555; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">👤 アバター切替</button>
           <button id="hangup-btn" style="background-color: #f44336; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">退出</button>
         </div>
         <div style="background: #f8f9fa; padding: 15px; border-radius: 12px; margin-bottom: 15px;">
-          <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景設定 (ファイル選択で適用)</label>
+          <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景設定</label>
           <input type="file" id="bg-upload" accept="image/*" style="width: 100%; font-size: 10px; margin-top: 5px;">
         </div>
         <div style="background: #f8f9fa; padding: 15px; border-radius: 12px;">
-          <input type="text" id="user-name-input" placeholder="あなたの名前" value="User-${Math.floor(Math.random()*1000)}" style="width: 100%; padding: 8px; margin-bottom: 10px; border-radius: 5px; border: 1px solid #ddd;">
+          <input type="text" id="user-name-input" placeholder="名前" value="User-${Math.floor(Math.random()*1000)}" style="width: 100%; padding: 8px; margin-bottom: 10px; border-radius: 5px; border: 1px solid #ddd;">
           <div style="display: flex; gap: 10px;">
              <input id="remote-id-input" type="text" placeholder="誰か一人のIDを入力" style="flex: 2; padding: 8px; border-radius: 5px; border: 1px solid #ddd;">
              <button id="connect-btn" style="flex: 1; background-color: #646cff; color: white; border-radius: 5px; cursor:pointer;">入室</button>
@@ -38,7 +38,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
     </div>
     <div style="width: 250px; background: #fff; border-left: 1px solid #ddd; display: flex; flex-direction: column;">
-      <div style="padding: 15px; background: #646cff; color: white; font-weight: bold;">チャット履歴</div>
+      <div style="padding: 15px; background: #646cff; color: white; font-weight: bold;">チャット</div>
       <div id="chat-box" style="flex: 1; overflow-y: auto; padding: 10px; font-size: 13px; display: flex; flex-direction: column; gap: 5px;"></div>
       <div style="padding: 10px; border-top: 1px solid #eee; display: flex; gap: 5px;">
         <input type="text" id="chat-input" placeholder="@nijinai 質問してね" style="flex: 1; padding: 5px;">
@@ -76,34 +76,28 @@ async function initAI() {
 }
 initAI();
 
-// --- 4. 映像処理 (FaceMesh & SelfieSegmentation) ---
+// --- 4. 映像処理 (MediaPipe) ---
 const selfie = new SelfieSegmentation({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}` });
 selfie.setOptions({ modelSelection: 1 });
-
 const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
 faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
 
 let currentMask: any = null;
-selfie.onResults((res) => { currentMask = res.segmentationMask; }); // ここでSelfieSegmentationを使用
+selfie.onResults((res) => { currentMask = res.segmentationMask; });
 
 faceMesh.onResults((res) => {
   ctx.save(); ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (backgroundImg) ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
   ctx.translate(canvas.width, 0); ctx.scale(-1, 1);
-
   if (res.image) {
     if (currentMask && backgroundImg && !isAvatarMode) {
-      // 背景合成ロジック
       const off = document.createElement('canvas'); off.width = 480; off.height = 360;
       const oCtx = off.getContext('2d')!;
       oCtx.drawImage(currentMask, 0, 0, 480, 360);
       oCtx.globalCompositeOperation = 'source-in'; oCtx.drawImage(res.image, 0, 0, 480, 360);
       ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
-    } else {
-      ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
-    }
+    } else { ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height); }
   }
-
   if (isAvatarMode && res.multiFaceLandmarks?.[0] && imgClose && imgOpen) {
     const lm = res.multiFaceLandmarks[0];
     const cx = lm[1].x * canvas.width, cy = lm[1].y * canvas.height;
@@ -115,11 +109,12 @@ faceMesh.onResults((res) => {
   ctx.restore();
 });
 
-// --- 5. 通信処理 (3人以上対応) ---
+// --- 5. 通信コア (多人数対応) ---
 const peer = new Peer();
 
 const connectToPeer = (tid: string) => {
   if (tid === peer.id || dataConnections.has(tid)) return;
+  console.log("接続開始:", tid);
   const conn = peer.connect(tid);
   setupData(conn);
   if (processedStream) {
@@ -131,8 +126,9 @@ const connectToPeer = (tid: string) => {
 const setupData = (conn: DataConnection) => {
   dataConnections.set(conn.peer, conn);
   conn.on('open', () => {
+    // 自分が知っている全員のIDを送信（多人数バケツリレー）
     conn.send({ type: 'signal', peers: Array.from(dataConnections.keys()) });
-    addChatMessage("System", `${conn.peer.slice(0,5)}が入室しました`);
+    addChatMessage("System", `${conn.peer.slice(0,5)}さんが入室しました`);
   });
   conn.on('data', (data: any) => {
     if (data.type === 'chat') addChatMessage(data.name, data.content);
@@ -150,7 +146,8 @@ const addVideo = (pid: string, s: MediaStream) => {
   remoteVideoIds.add(pid);
   const div = document.createElement('div');
   div.id = `remote-wrap-${pid}`;
-  div.innerHTML = `<p style="font-size:10px;text-align:center;">ID:${pid.slice(0,5)}</p>`;
+  div.style.textAlign = "center";
+  div.innerHTML = `<p style="font-size:10px; color:#666;">ID: ${pid.slice(0,5)}</p>`;
   const v = document.createElement('video');
   v.style.width="280px"; v.style.borderRadius="15px"; v.srcObject=s; v.autoplay=true; v.playsInline=true;
   div.appendChild(v); videoGrid.appendChild(div);
@@ -171,9 +168,10 @@ function addChatMessage(name: string, content: string) {
   chatBox.appendChild(p); chatBox.scrollTop = chatBox.scrollHeight;
 }
 
-// --- 6. イベント・メディア起動 ---
+// --- 6. イベント ---
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
-  const rid = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value.trim();
+  const ridInput = document.querySelector<HTMLInputElement>('#remote-id-input');
+  const rid = ridInput ? ridInput.value.trim() : "";
   if (rid) connectToPeer(rid);
 });
 
@@ -183,6 +181,12 @@ document.querySelector('#send-btn')?.addEventListener('click', async () => {
   if (!input.value) return;
   addChatMessage("自分", input.value);
   dataConnections.forEach(c => c.send({ type: 'chat', name, content: input.value }));
+  if (input.value.includes("@nijinai") && engine) {
+    const res = await engine.chat.completions.create({
+      messages: [{ role: "system", content: "猫のnijinaiです。語尾に『にゃ』を付けて。" }, { role: "user", content: input.value }]
+    });
+    addChatMessage("nijinai", res.choices[0].message.content || "にゃ？");
+  }
   input.value = "";
 });
 
