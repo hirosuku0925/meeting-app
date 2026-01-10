@@ -1,5 +1,5 @@
 import './style.css'
-import { Peer, DataConnection, MediaConnection } from 'peerjs'
+import { Peer, DataConnection } from 'peerjs' // MediaConnectionは型推論に任せて削除
 import { FaceMesh } from '@mediapipe/face_mesh'
 import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 import * as webllm from "@mlc-ai/web-llm"
@@ -32,14 +32,9 @@ document.querySelector('#app')!.innerHTML = `
         <div style="background: #f8f9fa; padding: 15px; border-radius: 12px; text-align: left; margin-bottom: 15px;">
           <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景・アバター設定</label>
           <input type="file" id="bg-upload" accept="image/*" style="width: 100%; font-size: 10px; margin-top: 5px;">
-          <div style="display: flex; gap: 5px; margin-top: 5px;">
-            <input type="file" id="avatar-close" accept="image/*" title="通常" style="font-size: 9px; width: 33%;">
-            <input type="file" id="avatar-open" accept="image/*" title="口開" style="font-size: 9px; width: 33%;">
-            <input type="file" id="avatar-blink" accept="image/*" title="瞬き" style="font-size: 9px; width: 33%;">
-          </div>
         </div>
         <div style="background: #f8f9fa; padding: 15px; border-radius: 12px;">
-          <input type="text" id="user-name-input" placeholder="名前" value="User Name" style="width: 100%; padding: 8px; margin-bottom: 10px; border-radius: 5px; border: 1px solid #ddd;">
+          <input type="text" id="user-name-input" placeholder="名前" value="User-${Math.floor(Math.random()*100)}" style="width: 100%; padding: 8px; margin-bottom: 10px; border-radius: 5px; border: 1px solid #ddd;">
           <div style="display: flex; gap: 10px;">
              <input id="remote-id-input" type="text" placeholder="入室するIDを入力" style="flex: 2; padding: 8px; border-radius: 5px; border: 1px solid #ddd;">
              <button id="connect-btn" style="flex: 1; background-color: #646cff; color: white; border-radius: 5px;">入室</button>
@@ -60,7 +55,7 @@ document.querySelector('#app')!.innerHTML = `
   </div>
 `
 
-// --- グローバル変数 & 設定 ---
+// --- グローバル変数 ---
 const canvas = document.querySelector('#local-canvas') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
 const video = document.querySelector('#hidden-video') as HTMLVideoElement;
@@ -70,32 +65,28 @@ const aiStatus = document.getElementById("ai-status")!;
 const videoGrid = document.querySelector('#video-grid')!;
 
 let isMicOn = true, isAvatarMode = false;
-let imgClose: HTMLImageElement | null = null, imgOpen: HTMLImageElement | null = null, imgBlink: HTMLImageElement | null = null, backgroundImg: HTMLImageElement | null = null;
-let processedStream: MediaStream;
+let imgClose: HTMLImageElement | null = null, imgOpen: HTMLImageElement | null = null, backgroundImg: HTMLImageElement | null = null;
+let processedStream: MediaStream | null = null;
 const connections: Map<string, DataConnection> = new Map();
 const remoteStreams: Set<string> = new Set();
 let reactions: { emoji: string, time: number }[] = [];
 
-// --- AI (WebLLM) 準備 ---
+// --- AI準備 ---
 let engine: webllm.MLCEngine | null = null;
 async function initAI() {
   try {
     engine = new webllm.MLCEngine();
-    engine.setInitProgressCallback((report) => {
-      aiStatus.innerText = `🤖 AI読込中: ${Math.round(report.progress * 100)}%`;
-    });
+    engine.setInitProgressCallback((report) => { aiStatus.innerText = `🤖 AI読込中: ${Math.round(report.progress * 100)}%`; });
     await engine.reload("Llama-3.1-8B-Instruct-q4f16_1-MLC");
     aiStatus.innerText = "🤖 AI準備完了！ @nijinai と呼んでね";
-  } catch (e) {
-    aiStatus.innerText = "❌ AI起動失敗 (WebGPU非対応)";
-  }
+  } catch (e) { aiStatus.innerText = "❌ AI起動失敗"; }
 }
 initAI();
 
 // --- メディア処理 (MediaPipe) ---
-const selfie = new SelfieSegmentation({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}` });
+const selfie = new SelfieSegmentation({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}` });
 selfie.setOptions({ modelSelection: 1 });
-const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
+const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
 faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
 
 let currentMask: any = null;
@@ -126,58 +117,58 @@ faceMesh.onResults((res) => {
 
     if (isAvatarMode && imgClose && imgOpen) {
       const isMouthOpen = Math.abs(landmarks[13].y - landmarks[14].y) > 0.025;
-      const isBlinking = Math.abs(landmarks[159].y - landmarks[145].y) < 0.012;
       ctx.save(); ctx.beginPath(); ctx.arc(centerX, centerY, radius, 0, Math.PI * 2); ctx.clip();
-      let targetImg = (isBlinking && imgBlink) ? imgBlink : (isMouthOpen && isMicOn ? imgOpen : imgClose);
-      ctx.drawImage(targetImg, centerX - radius, centerY - radius, radius * 2, radius * 2); ctx.restore();
+      ctx.drawImage(isMouthOpen && isMicOn ? imgOpen : imgClose, centerX - radius, centerY - radius, radius * 2, radius * 2); ctx.restore();
     }
-
     const now = Date.now();
     reactions = reactions.filter(r => now - r.time < 2000);
     reactions.forEach((r, i) => {
       ctx.save(); ctx.scale(-1, 1); ctx.font = "40px serif"; ctx.textAlign = "center";
-      ctx.fillText(r.emoji, -centerX, centerY - radius - 20 - (i * 40)); 
-      ctx.restore();
+      ctx.fillText(r.emoji, -centerX, centerY - radius - 20 - (i * 40)); ctx.restore();
     });
   }
   ctx.restore();
 });
 
-// --- 通信ロジック (PeerJS) ---
+// --- 多人数対応 通信ロジック ---
 const peer = new Peer();
 
-// ビデオ要素をグリッドに追加する関数（重複チェック付き）
 const addVideoToGrid = (peerId: string, stream: MediaStream) => {
   if (remoteStreams.has(peerId)) return;
   remoteStreams.add(peerId);
-
   const container = document.createElement('div');
   container.id = `remote-container-${peerId}`;
-  container.style.textAlign = "center";
-  
-  const label = document.createElement('p');
-  label.innerText = `ID: ${peerId.slice(0, 5)}`;
-  label.style.fontSize = "12px";
-  
+  container.innerHTML = `<p style="font-size:12px;">ID: ${peerId.slice(0, 5)}</p>`;
   const v = document.createElement('video');
-  v.srcObject = stream;
-  v.autoplay = true;
-  v.playsInline = true;
-  v.style.width = "280px";
-  v.style.borderRadius = "15px";
-  v.style.background = "#222";
-
-  container.appendChild(label);
-  container.appendChild(v);
-  videoGrid.appendChild(container);
+  v.srcObject = stream; v.autoplay = true; v.playsInline = true;
+  v.style.width = "280px"; v.style.borderRadius = "15px";
+  container.appendChild(v); videoGrid.appendChild(container);
 };
 
-// データ通信のセットアップ
+const connectToPeer = (remoteId: string) => {
+  if (!remoteId || remoteId === peer.id || connections.has(remoteId)) return;
+  const conn = peer.connect(remoteId);
+  setupDataConn(conn);
+  if (processedStream) {
+    const call = peer.call(remoteId, processedStream);
+    call.on('stream', (stream) => addVideoToGrid(remoteId, stream));
+  }
+};
+
 const setupDataConn = (conn: DataConnection) => {
   connections.set(conn.peer, conn);
+  conn.on('open', () => {
+    // 参加者リストを送って多人数接続を自動化
+    const allIds = Array.from(connections.keys());
+    conn.send({ type: 'intro', peers: allIds });
+    addChatMessage("System", `${conn.peer.slice(0,5)}が入室しました`);
+  });
   conn.on('data', (data: any) => {
-    if (data.type === 'chat') addChatMessage(data.name, data.content, data.name === 'nijinai' ? '#ff4d97' : '#333');
+    if (data.type === 'chat') addChatMessage(data.name, data.content);
     if (data.type === 'reaction') reactions.push({ emoji: data.content, time: Date.now() });
+    if (data.type === 'intro') {
+      data.peers.forEach((pid: string) => connectToPeer(pid));
+    }
   });
   conn.on('close', () => {
     connections.delete(conn.peer);
@@ -187,66 +178,46 @@ const setupDataConn = (conn: DataConnection) => {
 };
 
 peer.on('open', (id) => statusEl.innerText = `あなたのID: ${id}`);
-
-// 相手から接続された時
 peer.on('connection', setupDataConn);
-
-// 相手からビデオ着信した時
 peer.on('call', (call) => {
-  call.answer(processedStream);
-  call.on('stream', (stream) => addVideoToGrid(call.peer, stream));
+  if (processedStream) {
+    call.answer(processedStream);
+    call.on('stream', (stream) => addVideoToGrid(call.peer, stream));
+  }
 });
 
-// --- UIイベント ---
-function addChatMessage(name: string, content: string, color: string = "#333") {
+// --- イベント ---
+function addChatMessage(name: string, content: string) {
   const p = document.createElement('p');
-  p.innerHTML = `<b style="color:${color}">${name}:</b> ${content}`;
-  chatBox.appendChild(p);
-  chatBox.scrollTop = chatBox.scrollHeight;
+  p.innerHTML = `<b>${name}:</b> ${content}`;
+  chatBox.appendChild(p); chatBox.scrollTop = chatBox.scrollHeight;
 }
 
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
-  const remoteId = (document.querySelector('#remote-id-input') as HTMLInputElement).value;
-  if (!remoteId || remoteId === peer.id) return;
-
-  // データ接続とビデオ通話を両方送る
-  setupDataConn(peer.connect(remoteId));
-  const call = peer.call(remoteId, processedStream);
-  call.on('stream', (stream) => addVideoToGrid(remoteId, stream));
+  const input = document.querySelector('#remote-id-input') as HTMLInputElement;
+  connectToPeer(input.value.trim());
 });
 
 document.querySelector('#send-btn')?.addEventListener('click', async () => {
   const input = document.querySelector('#chat-input') as HTMLInputElement;
   const name = (document.querySelector('#user-name-input') as HTMLInputElement).value;
   if (!input.value) return;
-
   const msg = input.value;
   addChatMessage("自分", msg);
   connections.forEach(c => c.send({ type: 'chat', name, content: msg }));
-
   if (msg.includes("@nijinai") && engine) {
-    const messages = [
-      { role: "system", content: "あなたはnijinaiという猫です。語尾に『にゃ』を付けて、短く可愛く答えて。" },
-      { role: "user", content: msg.replace("@nijinai", "") }
-    ];
-    try {
-      const reply = await engine.chat.completions.create({ messages: messages as any });
-      const aiText = reply.choices[0].message.content || "にゃ？";
-      addChatMessage("nijinai", aiText, "#ff4d97");
-      connections.forEach(c => c.send({ type: 'chat', name: "nijinai", content: aiText }));
-      reactions.push({ emoji: '❤️', time: Date.now() });
-      connections.forEach(c => c.send({ type: 'reaction', content: '❤️' }));
-    } catch (e) { addChatMessage("nijinai", "にゃあ、エラーだにゃ...", "#ff4d97"); }
+    const reply = await engine.chat.completions.create({ messages: [{ role: "user", content: msg.replace("@nijinai","") }] as any });
+    const aiTxt = reply.choices[0].message.content || "にゃ？";
+    addChatMessage("nijinai", aiTxt);
+    connections.forEach(c => c.send({ type: 'chat', name: "nijinai", content: aiTxt }));
   }
   input.value = "";
 });
 
-// カメラ・マイク初期化
-navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true }).then(stream => {
+navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
   processedStream = canvas.captureStream(30);
-  stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
-  video.srcObject = stream;
-  video.play();
+  stream.getAudioTracks().forEach(t => processedStream!.addTrack(t));
+  video.srcObject = stream; video.play();
   const loop = async () => { 
     await selfie.send({ image: video }); 
     await faceMesh.send({ image: video }); 
@@ -255,7 +226,11 @@ navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio:
   loop();
 });
 
-// 各種設定・ボタンイベント
+document.querySelector('#bg-upload')?.addEventListener('change', (e: any) => {
+  const f = e.target.files[0]; if(!f) return;
+  const i = new Image(); i.onload = () => backgroundImg = i; i.src = URL.createObjectURL(f);
+});
+
 document.querySelectorAll('.react-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const emoji = (btn as HTMLElement).dataset.emoji!;
@@ -264,28 +239,11 @@ document.querySelectorAll('.react-btn').forEach(btn => {
   });
 });
 
-const setImg = (id: string, target: string) => {
-  document.querySelector(`#${id}`)?.addEventListener('change', (e: any) => {
-    const f = e.target.files[0]; if(!f) return;
-    const i = new Image(); i.onload = () => {
-      if(target==='close') imgClose=i; else if(target==='open') imgOpen=i;
-      else if(target==='blink') imgBlink=i; else backgroundImg=i;
-    };
-    i.src = URL.createObjectURL(f);
-  });
-};
-setImg('avatar-close', 'close'); setImg('avatar-open', 'open'); setImg('avatar-blink', 'blink'); setImg('bg-upload', 'bg');
-
 document.querySelector('#camera-btn')?.addEventListener('click', () => {
   const t = (video.srcObject as MediaStream).getVideoTracks()[0]; t.enabled = !t.enabled;
-  (document.querySelector('#camera-btn') as HTMLButtonElement).innerText = t.enabled ? "📹 カメラ: ON" : "📹 カメラ: OFF";
 });
 document.querySelector('#mic-btn')?.addEventListener('click', () => {
   isMicOn = !isMicOn; (video.srcObject as MediaStream).getAudioTracks()[0].enabled = isMicOn;
-  (document.querySelector('#mic-btn') as HTMLButtonElement).innerText = isMicOn ? "🎤 マイク: ON" : "🎤 マイク: OFF";
 });
-document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
-  isAvatarMode = !isAvatarMode;
-  (document.querySelector('#avatar-mode-btn') as HTMLButtonElement).innerText = isAvatarMode ? "👤 アバター: ON" : "👤 アバター: OFF";
-});
+document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => isAvatarMode = !isAvatarMode);
 document.querySelector('#hangup-btn')?.addEventListener('click', () => location.reload());
