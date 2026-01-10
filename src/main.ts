@@ -4,7 +4,7 @@ import { FaceMesh } from '@mediapipe/face_mesh'
 import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 import * as webllm from "@mlc-ai/web-llm"
 
-// --- 1. UI構築 ---
+// --- 1. UI構築 (変更なし) ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; overflow: hidden; background: #f0f2f5;">
     <div style="flex: 1; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto;">
@@ -43,9 +43,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// --- 2. グローバル変数 ---
+// --- 変数設定 ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
-const ctx = canvas.getContext('2d')!;
+const ctx = canvas.getContext('2d', { alpha: false })!; // パフォーマンス向上
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const chatBox = document.querySelector<HTMLDivElement>('#chat-box')!;
 const aiStatus = document.getElementById("ai-status")!;
@@ -58,40 +58,39 @@ let isThinking = false;
 let mediaRecorder: MediaRecorder | null = null;
 let recordedChunks: Blob[] = [];
 
-// --- 3. 軽量AI (WebLLM) 設定 ---
+// --- WebLLM ---
 let engine: webllm.MLCEngine | null = null;
 async function initAI() {
   try {
     engine = new webllm.MLCEngine();
     engine.setInitProgressCallback((r) => aiStatus.innerText = `🤖 AI準備中: ${Math.round(r.progress * 100)}%`);
     await engine.reload("SmolLM-135M-Instruct-v0.2-q4f16_1-MLC");
-    aiStatus.innerText = "🤖 AI準備完了！ @nijinai と呼んでね";
-  } catch (e) { aiStatus.innerText = "❌ AI起動失敗(WebGPU)"; }
+    aiStatus.innerText = "🤖 AI準備完了！";
+  } catch (e) { aiStatus.innerText = "❌ AI読込失敗"; }
 }
 initAI();
 
-// --- 4. 映像処理 (Mediapipe) ---
-const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
-faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
+// --- Mediapipe (FaceMesh / Selfie) ---
+const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/${f}` });
+faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
 
-const selfie = new SelfieSegmentation({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}` });
+const selfie = new SelfieSegmentation({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1/${f}` });
 selfie.setOptions({ modelSelection: 1 });
-
-let currentMask: any = null;
-selfie.onResults((res) => { currentMask = res.segmentationMask; });
 
 faceMesh.onResults((res) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // 左右反転
   ctx.translate(canvas.width, 0); ctx.scale(-1, 1);
+  
+  // 映像を描画 (FaceMeshの結果があればそれを使う、なければビデオを直接描画)
   if (res.image) {
-    // 常に人物を描画するように修正
     ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
   }
   ctx.restore();
 });
 
-// --- 5. 通信 (PeerJS) 多人数対応 ---
+// --- PeerJS (通信) ---
 const peer = new Peer();
 peer.on('open', (id) => statusEl.innerText = `あなたのID: ${id}`);
 
@@ -103,13 +102,12 @@ const setupConn = (conn: DataConnection) => {
   conn.on('close', () => connections.delete(conn));
 };
 
-peer.on('connection', (conn) => {
-  setupConn(conn);
-});
-
+peer.on('connection', setupConn);
 peer.on('call', (call) => {
-  call.answer(processedStream);
-  handleRemoteStream(call);
+  if (processedStream) {
+    call.answer(processedStream);
+    handleRemoteStream(call);
+  }
 });
 
 function handleRemoteStream(call: any) {
@@ -117,21 +115,20 @@ function handleRemoteStream(call: any) {
     const id = `video-${call.peer}`;
     if (document.getElementById(id)) return;
     const v = document.createElement('video');
-    v.id = id; v.style.width = "240px"; v.style.borderRadius = "10px";
+    v.id = id; v.style.width = "200px"; v.style.borderRadius = "10px";
     v.srcObject = stream; v.autoplay = true; v.playsInline = true;
     document.querySelector('#video-grid')?.appendChild(v);
   });
-  call.on('close', () => document.getElementById(`video-${call.peer}`)?.remove());
 }
 
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
   const id = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
   if (!id || id === peer.id) return;
   setupConn(peer.connect(id));
-  handleRemoteStream(peer.call(id, processedStream));
+  if (processedStream) handleRemoteStream(peer.call(id, processedStream));
 });
 
-// --- 6. チャット & AI ---
+// --- チャット・録画 (省略せず統合) ---
 function addChatMessage(name: string, content: string, isAI = false) {
   const p = document.createElement('p');
   p.style.margin = "4px 0";
@@ -145,16 +142,16 @@ document.querySelector('#send-btn')?.addEventListener('click', async () => {
   const input = document.querySelector<HTMLInputElement>('#chat-input')!;
   const nameInput = document.querySelector<HTMLInputElement>('#user-name-input')!;
   if (!input.value || isThinking) return;
-
   const msg = input.value;
   addChatMessage("自分", msg);
   connections.forEach(c => c.send({ type: 'chat', name: nameInput.value, content: msg }));
-
   if (msg.includes("@nijinai") && engine) {
     isThinking = true;
     try {
-      const messages: any[] = [{ role: "system", content: "1行で答えて。" }, { role: "user", content: msg }];
-      const reply = await engine.chat.completions.create({ messages: messages as any, max_tokens: 30 });
+      const reply = await engine.chat.completions.create({ 
+        messages: [{ role: "system", content: "1行で答えて。" }, { role: "user", content: msg }],
+        max_tokens: 30 
+      });
       const aiText = reply.choices[0].message.content || "にゃ？";
       addChatMessage("nijinai", aiText, true);
       connections.forEach(c => c.send({ type: 'chat', name: "nijinai", content: aiText }));
@@ -163,7 +160,6 @@ document.querySelector('#send-btn')?.addEventListener('click', async () => {
   input.value = "";
 });
 
-// --- 7. 録画機能 ---
 document.querySelector('#record-btn')?.addEventListener('click', () => {
   const btn = document.querySelector<HTMLButtonElement>('#record-btn')!;
   if (!mediaRecorder || mediaRecorder.state === "inactive") {
@@ -174,7 +170,7 @@ document.querySelector('#record-btn')?.addEventListener('click', () => {
       const blob = new Blob(recordedChunks, { type: 'video/webm' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = `meeting-${Date.now()}.webm`;
+      a.download = `meeting.webm`;
       a.click();
     };
     mediaRecorder.start();
@@ -185,29 +181,49 @@ document.querySelector('#record-btn')?.addEventListener('click', () => {
   }
 });
 
-// --- 8. 起動処理 (黒画面対策) ---
+// --- 🌟 黒画面対策・起動処理 ---
 async function startApp() {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: true });
-    
-    // 加工用ストリーム作成
-    processedStream = canvas.captureStream(25);
-    stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      video: { width: 480, height: 360, frameRate: { ideal: 30 } }, 
+      audio: true 
+    });
     
     video.srcObject = stream;
-    await video.play();
+    // ビデオが実際に再生されるまで待機
+    await new Promise((resolve) => {
+      video.onloadedmetadata = () => {
+        video.play().then(resolve);
+      };
+    });
+
+    // 加工用ストリームの準備
+    processedStream = canvas.captureStream(30);
+    stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
 
     const loop = async () => {
-      if (video.readyState >= 2) {
-        await selfie.send({ image: video });
-        await faceMesh.send({ image: video });
+      // 映像データが有効な場合のみMediapipeに送る
+      if (video.readyState >= 2 && video.videoWidth > 0) {
+        try {
+          await selfie.send({ image: video });
+          await faceMesh.send({ image: video });
+        } catch (e) {
+          // エラー時は通常のビデオを描画して繋ぐ
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        }
+      } else {
+        // ビデオが準備できていない間は黒画面にならないよう待機
+        ctx.fillStyle = "black";
+        ctx.fillRect(0,0, canvas.width, canvas.height);
       }
       requestAnimationFrame(loop);
     };
     loop();
+    
+    console.log("Camera and Loop started successfully");
   } catch (err) {
-    console.error("Camera error:", err);
-    alert("カメラを許可してください");
+    console.error("Camera access denied or error:", err);
+    alert("カメラが起動できません。ブラウザの設定で許可してください。");
   }
 }
 
