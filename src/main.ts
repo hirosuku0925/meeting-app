@@ -4,7 +4,7 @@ import { FaceMesh } from '@mediapipe/face_mesh'
 import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 import * as webllm from "@mlc-ai/web-llm"
 
-// --- 1. UI構築 ---
+// --- UI構築 ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; overflow: hidden; background: #f0f2f5;">
     <div style="flex: 1; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto;">
@@ -60,7 +60,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// --- 2. グローバル変数 ---
+// --- グローバル変数 ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
@@ -71,12 +71,12 @@ const videoGrid = document.querySelector('#video-grid')!;
 
 let isMicOn = true, isAvatarMode = false;
 let imgClose: HTMLImageElement | null = null, imgOpen: HTMLImageElement | null = null, imgBlink: HTMLImageElement | null = null, backgroundImg: HTMLImageElement | null = null;
-let processedStream: MediaStream;
+let processedStream: MediaStream | null = null;
 const dataConnections: Map<string, DataConnection> = new Map();
 const remoteVideoIds: Set<string> = new Set();
 let reactions: { emoji: string, time: number }[] = [];
 
-// --- 3. AI (WebLLM) 準備 ---
+// --- AI (WebLLM) 準備 ---
 let engine: webllm.MLCEngine | null = null;
 async function initAI() {
   try {
@@ -92,10 +92,10 @@ async function initAI() {
 }
 initAI();
 
-// --- 4. 描画処理 (FaceMesh / Segmentation) ---
-const selfie = new SelfieSegmentation({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}` });
+// --- MediaPipe 設定 ---
+const selfie = new SelfieSegmentation({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}` });
 selfie.setOptions({ modelSelection: 1 });
-const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
+const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
 faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
 
 let currentMask: any = null;
@@ -106,71 +106,51 @@ faceMesh.onResults((res) => {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (backgroundImg) ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
   ctx.translate(canvas.width, 0); ctx.scale(-1, 1);
-  
   if (res.image) {
     if (currentMask && backgroundImg && !isAvatarMode) {
-      const offCanvas = document.createElement('canvas'); offCanvas.width = 480; offCanvas.height = 360;
-      const offCtx = offCanvas.getContext('2d')!;
-      offCtx.drawImage(currentMask, 0, 0, 480, 360);
-      offCtx.globalCompositeOperation = 'source-in'; offCtx.drawImage(res.image, 0, 0, 480, 360);
-      ctx.drawImage(offCanvas, 0, 0, canvas.width, canvas.height);
+      const off = document.createElement('canvas'); off.width = 480; off.height = 360;
+      const oCtx = off.getContext('2d')!;
+      oCtx.drawImage(currentMask, 0, 0, 480, 360);
+      oCtx.globalCompositeOperation = 'source-in'; oCtx.drawImage(res.image, 0, 0, 480, 360);
+      ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
     } else {
       ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
     }
   }
-
   if (res.multiFaceLandmarks?.[0]) {
-    const landmarks = res.multiFaceLandmarks[0];
-    const centerX = landmarks[1].x * canvas.width, centerY = landmarks[1].y * canvas.height;
-    const radius = ((landmarks[454].x - landmarks[234].x) * canvas.width * 1.8) / 2;
-
+    const lm = res.multiFaceLandmarks[0];
+    const cx = lm[1].x * canvas.width, cy = lm[1].y * canvas.height;
+    const r = ((lm[454].x - lm[234].x) * canvas.width * 1.8) / 2;
     if (isAvatarMode && imgClose && imgOpen) {
-      const isMouthOpen = Math.abs(landmarks[13].y - landmarks[14].y) > 0.025;
-      const isBlinking = Math.abs(landmarks[159].y - landmarks[145].y) < 0.012;
-      ctx.save(); ctx.beginPath(); ctx.arc(centerX, centerY, radius, 0, Math.PI * 2); ctx.clip();
-      let targetImg = (isBlinking && imgBlink) ? imgBlink : (isMouthOpen && isMicOn ? imgOpen : imgClose);
-      ctx.drawImage(targetImg, centerX - radius, centerY - radius, radius * 2, radius * 2); ctx.restore();
+      const isOpen = Math.abs(lm[13].y - lm[14].y) > 0.025;
+      const isBlink = Math.abs(lm[159].y - lm[145].y) < 0.012;
+      ctx.save(); ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.clip();
+      let targetImg = (isBlink && imgBlink) ? imgBlink : (isOpen && isMicOn ? imgOpen : imgClose);
+      ctx.drawImage(targetImg, cx - r, cy - r, r * 2, r * 2); ctx.restore();
     }
-
     const now = Date.now();
     reactions = reactions.filter(r => now - r.time < 2000);
-    reactions.forEach((r, i) => {
+    reactions.forEach((re, i) => {
       ctx.save(); ctx.scale(-1, 1); ctx.font = "40px serif"; ctx.textAlign = "center";
-      ctx.fillText(r.emoji, -centerX, centerY - radius - 20 - (i * 40)); 
-      ctx.restore();
+      ctx.fillText(re.emoji, -cx, cy - r - 20 - (i * 40)); ctx.restore();
     });
   }
   ctx.restore();
 });
 
-// --- 5. 通信処理 (PeerJS) ---
+// --- 通信処理 ---
 const peer = new Peer();
 
-function addChatMessage(name: string, content: string, color: string = "#333") {
-  const p = document.createElement('p');
-  p.innerHTML = `<b style="color:${color}">${name}:</b> ${content}`;
-  chatBox.appendChild(p);
-  chatBox.scrollTop = chatBox.scrollHeight;
-}
-
-const addVideoToGrid = (peerId: string, stream: MediaStream) => {
-  if (remoteVideoIds.has(peerId)) return;
-  remoteVideoIds.add(peerId);
-
+const addVideoToGrid = (pid: string, stream: MediaStream) => {
+  if (remoteVideoIds.has(pid)) return;
+  remoteVideoIds.add(pid);
   const div = document.createElement('div');
-  div.id = `remote-wrap-${peerId}`;
+  div.id = `remote-wrap-${pid}`;
   div.style.textAlign = "center";
-  div.innerHTML = `<p style="font-size: 10px; color:#666;">ID: ${peerId.slice(0,5)}</p>`;
-  
+  div.innerHTML = `<p style="font-size: 10px; color:#666;">ID: ${pid.slice(0,5)}</p>`;
   const v = document.createElement('video');
-  v.style.width = "280px"; 
-  v.style.borderRadius = "15px"; 
-  v.srcObject = stream; 
-  v.autoplay = true; 
-  v.playsInline = true;
-  
-  div.appendChild(v);
-  videoGrid.appendChild(div);
+  v.style.width = "280px"; v.style.borderRadius = "15px"; v.srcObject = stream; v.autoplay = true; v.playsInline = true;
+  div.appendChild(v); videoGrid.appendChild(div);
 };
 
 const setupConn = (conn: DataConnection) => {
@@ -189,71 +169,74 @@ const setupConn = (conn: DataConnection) => {
 peer.on('open', (id) => statusEl.innerText = `あなたのID: ${id}`);
 peer.on('connection', setupConn);
 peer.on('call', (call: MediaConnection) => {
-  call.answer(processedStream);
-  call.on('stream', (stream) => addVideoToGrid(call.peer, stream));
+  if (processedStream) {
+    call.answer(processedStream);
+    call.on('stream', (s) => addVideoToGrid(call.peer, s));
+  }
 });
 
-// --- 6. イベントリスナー ---
+function addChatMessage(name: string, content: string, color: string = "#333") {
+  const p = document.createElement('p');
+  p.innerHTML = `<b style="color:${color}">${name}:</b> ${content}`;
+  chatBox.appendChild(p); chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+// --- イベント ---
 document.querySelector('#connect-btn')?.addEventListener('click', () => {
-  const id = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
-  if (!id || id === peer.id) return;
-  
-  setupConn(peer.connect(id));
-  const call = peer.call(id, processedStream);
-  call.on('stream', (s) => addVideoToGrid(id, s));
+  const rid = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value.trim();
+  if (!rid || rid === peer.id) return;
+  if (!processedStream) {
+    alert("カメラが準備中だにゃ！少し待ってにゃ。");
+    return;
+  }
+  console.log("接続開始:", rid);
+  setupConn(peer.connect(rid));
+  const call = peer.call(rid, processedStream);
+  call.on('stream', (s) => addVideoToGrid(rid, s));
 });
 
 document.querySelector('#send-btn')?.addEventListener('click', async () => {
   const input = document.querySelector<HTMLInputElement>('#chat-input')!;
   const name = (document.querySelector<HTMLInputElement>('#user-name-input')!).value;
   if (!input.value) return;
-
   const msg = input.value;
   addChatMessage("自分", msg);
   dataConnections.forEach(c => c.send({ type: 'chat', name, content: msg }));
-
   if (msg.includes("@nijinai") && engine) {
-    const messages = [
-      { role: "system", content: "あなたはnijinaiという猫です。語尾に『にゃ』を付けて、短く可愛く答えて。" },
-      { role: "user", content: msg.replace("@nijinai", "") }
-    ];
-    try {
-      const reply = await engine.chat.completions.create({ messages: messages as any });
-      const aiText = reply.choices[0].message.content || "にゃ？";
-      addChatMessage("nijinai", aiText, "#ff4d97");
-      dataConnections.forEach(c => c.send({ type: 'chat', name: "nijinai", content: aiText }));
-      reactions.push({ emoji: '❤️', time: Date.now() });
-      dataConnections.forEach(c => c.send({ type: 'reaction', content: '❤️' }));
-    } catch (e) { addChatMessage("nijinai", "にゃあ、エラーだにゃ...", "#ff4d97"); }
+    const res = await engine.chat.completions.create({
+      messages: [{ role: "system", content: "あなたはnijinaiという猫です。語尾に『にゃ』を付けて短く答えて。" }, { role: "user", content: msg.replace("@nijinai", "") }]
+    });
+    const aiText = res.choices[0].message.content || "にゃ？";
+    addChatMessage("nijinai", aiText, "#ff4d97");
+    dataConnections.forEach(c => c.send({ type: 'chat', name: "nijinai", content: aiText }));
   }
   input.value = "";
 });
 
-// メディア開始
+// カメラ開始
 navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
   processedStream = canvas.captureStream(30);
-  stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
+  stream.getAudioTracks().forEach(t => processedStream!.addTrack(t));
   video.srcObject = stream;
   video.play();
   const loop = async () => { await selfie.send({ image: video }); await faceMesh.send({ image: video }); requestAnimationFrame(loop); };
   loop();
 });
 
-// UIコントロール
-document.querySelectorAll('.react-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const emoji = (btn as HTMLElement).dataset.emoji!;
-    reactions.push({ emoji, time: Date.now() });
-    dataConnections.forEach(c => c.send({ type: 'reaction', content: emoji }));
+// ボタン系
+document.querySelectorAll('.react-btn').forEach(b => {
+  b.addEventListener('click', () => {
+    const e = (b as HTMLElement).dataset.emoji!;
+    reactions.push({ emoji: e, time: Date.now() });
+    dataConnections.forEach(c => c.send({ type: 'reaction', content: e }));
   });
 });
-
-const setImg = (id: string, target: string) => {
+const setImg = (id: string, t: string) => {
   document.querySelector<HTMLInputElement>(`#${id}`)?.addEventListener('change', (e: any) => {
-    const f = e.target.files[0]; if(!f) return;
+    const f = e.target.files[0]; if (!f) return;
     const i = new Image(); i.onload = () => {
-      if(target==='close') imgClose=i; else if(target==='open') imgOpen=i;
-      else if(target==='blink') imgBlink=i; else backgroundImg=i;
+      if (t === 'close') imgClose = i; else if (t === 'open') imgOpen = i;
+      else if (t === 'blink') imgBlink = i; else backgroundImg = i;
     };
     i.src = URL.createObjectURL(f);
   });
