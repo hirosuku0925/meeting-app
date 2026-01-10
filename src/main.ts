@@ -2,36 +2,34 @@ import './style.css'
 import { Peer } from 'peerjs'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <div style="display: flex; height: 100vh; font-family: sans-serif; background: #1a1a1a; color: white;">
-    <div style="width: 280px; background: #2c3e50; padding: 20px; display: flex; flex-direction: column; gap: 15px; box-shadow: 2px 0 10px rgba(0,0,0,0.5);">
+  <div style="display: flex; height: 100vh; font-family: sans-serif; background: #1a1a1a; color: white; overflow: hidden;">
+    <div style="width: 260px; background: #2c3e50; padding: 20px; display: flex; flex-direction: column; gap: 15px; z-index: 10;">
       <h2 style="color: #3498db; margin: 0; font-size: 20px;">🌐 AI会議室</h2>
       
-      <div style="display: flex; flex-direction: column; gap: 8px;">
-        <label style="font-size: 11px; color: #bdc3c7;">ルーム名（英数字）</label>
-        <input id="room-id-input" type="text" placeholder="例: teamA" style="padding: 10px; border-radius: 5px; border: none; color: #333;">
-        
-        <label style="font-size: 11px; color: #bdc3c7;">パスワード（英数字）</label>
-        <input id="room-pass-input" type="password" placeholder="****" style="padding: 10px; border-radius: 5px; border: none; color: #333;">
-        
-        <button id="join-room-btn" style="background: #3498db; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-weight: bold; margin-top: 5px;">入室・開始</button>
+      <div style="display: flex; flex-direction: column; gap: 10px;">
+        <input id="room-id-input" type="text" placeholder="ルーム名（英数字）" style="padding: 10px; border-radius: 5px; border: none; color: #333;">
+        <input id="room-pass-input" type="password" placeholder="パスワード" style="padding: 10px; border-radius: 5px; border: none; color: #333;">
+        <button id="join-room-btn" style="background: #3498db; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 16px;">会議に参加する</button>
       </div>
 
-      <div id="status-area" style="font-size: 12px; color: #f1c40f; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 5px; min-height: 50px; white-space: pre-wrap;">待機中...</div>
+      <div id="status-area" style="font-size: 12px; color: #2ecc71; text-align: center; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 5px; min-height: 40px;">
+        待機中
+      </div>
 
-      <div style="margin-top: auto; border-top: 1px solid #34495e; padding-top: 15px;">
-        <button id="hangup-btn" style="background: #e74c3c; color: white; border: none; padding: 10px; border-radius: 8px; cursor: pointer; width: 100%;">退出（リセット）</button>
+      <div style="margin-top: auto; display: flex; flex-direction: column; gap: 10px;">
+        <button id="hangup-btn" style="background: #e74c3c; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-weight: bold;">退出（終了）</button>
       </div>
     </div>
 
     <div style="flex: 1; display: flex; flex-direction: column; background: #000; position: relative;">
       <div id="main-display" style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px;">
-        <video id="big-video" autoplay playsinline muted style="max-width: 100%; max-height: 100%; border-radius: 12px; background: #111;"></video>
+        <video id="big-video" autoplay playsinline muted style="max-width: 100%; max-height: 100%; border-radius: 12px; box-shadow: 0 0 30px rgba(0,0,0,0.5);"></video>
       </div>
-      
-      <div id="video-grid" style="height: 160px; background: rgba(0,0,0,0.4); display: flex; gap: 10px; padding: 10px; overflow-x: auto; border-top: 1px solid #333;">
-        <div style="position: relative; min-width: 180px; height: 100%;">
-          <video id="local-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: cover; border-radius: 8px; border: 2px solid #3498db;"></video>
-          <div style="position: absolute; bottom: 5px; left: 5px; font-size: 10px; background: rgba(0,0,0,0.5); padding: 2px 5px;">あなた</div>
+
+      <div id="video-grid" style="height: 180px; background: rgba(0,0,0,0.4); display: flex; gap: 15px; padding: 15px; overflow-x: auto; border-top: 1px solid #333;">
+        <div id="local-container" style="position: relative; min-width: 220px; height: 100%;">
+          <video id="local-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: cover; border-radius: 10px; border: 3px solid #3498db;"></video>
+          <div style="position: absolute; bottom: 8px; left: 8px; font-size: 12px; background: rgba(0,0,0,0.6); padding: 2px 8px; border-radius: 4px;">あなた</div>
         </div>
       </div>
     </div>
@@ -45,7 +43,7 @@ const statusArea = document.querySelector<HTMLElement>('#status-area')!;
 
 let localStream: MediaStream;
 let peer: Peer | null = null;
-const connectedPeers = new Set<string>();
+const connectedPeers = new Map<string, any>(); // 誰が繋がっているか管理
 
 async function init() {
   try {
@@ -53,79 +51,82 @@ async function init() {
     localVideo.srcObject = localStream;
     bigVideo.srcObject = localStream;
   } catch (e) {
-    statusArea.innerText = "⚠️ カメラが見つかりません。許可してください。";
+    statusArea.innerText = "カメラを許可してください";
   }
 }
 
 document.querySelector('#join-room-btn')?.addEventListener('click', () => {
-  // 入力を英数字のみにクリーンアップ（エラー防止）
   const room = (document.getElementById('room-id-input') as HTMLInputElement).value.replace(/[^a-zA-Z0-9]/g, "");
   const pass = (document.getElementById('room-pass-input') as HTMLInputElement).value.replace(/[^a-zA-Z0-9]/g, "");
   
   if (!room || !pass) return alert("ルーム名とパスワードを英数字で入力してください");
 
   if (peer) peer.destroy();
-  connectedPeers.clear();
-
-  // 1〜8番の席を用意（少ないほうが相手を見つけやすい）
-  const myNum = Math.floor(Math.random() * 8) + 1;
-  const myID = `vroom${room}${pass}${myNum}`;
+  
+  // 1〜15の席をランダムに選ぶ
+  const myNum = Math.floor(Math.random() * 15) + 1;
+  const myID = `room_${room}_${pass}_${myNum}`;
   
   peer = new Peer(myID);
 
   peer.on('open', (id) => {
-    statusArea.innerText = `✅ 入室成功\nID: ${id}\n相手を探しています...`;
+    statusArea.innerText = `入室しました\n(ID: ${id})`;
     
-    // 他の1〜8番の人に一斉に電話をかける
-    for (let i = 1; i <= 8; i++) {
-      if (i === myNum) continue;
-      const targetID = `vroom${room}${pass}${i}`;
-      const call = peer!.call(targetID, localStream);
-      if (call) handleCall(call);
-    }
+    // 3秒おきに他の席(1-15)にいる人に自動で電話をかけ続ける
+    setInterval(() => {
+      for (let i = 1; i <= 15; i++) {
+        if (i === myNum) continue;
+        const targetID = `room_${room}_${pass}_${i}`;
+        if (!connectedPeers.has(targetID)) {
+          const call = peer!.call(targetID, localStream);
+          if (call) setupCallHandlers(call);
+        }
+      }
+    }, 3000);
   });
 
   peer.on('call', (call) => {
     call.answer(localStream);
-    handleCall(call);
+    setupCallHandlers(call);
   });
 
   peer.on('error', (err) => {
     if (err.type === 'unavailable-id') {
-      statusArea.innerText = "❌ 席が埋まっていました。もう一度「入室」を押してください。";
-    } else {
-      statusArea.innerText = `❌ エラー: ${err.type}`;
+      statusArea.innerText = "席が被りました。もう一度参加ボタンを押してください。";
     }
   });
 });
 
-function handleCall(call: any) {
-  call.on('stream', (stream: MediaStream) => {
+function setupCallHandlers(call: any) {
+  call.on('stream', (remoteStream: MediaStream) => {
     if (connectedPeers.has(call.peer)) return;
-    connectedPeers.add(call.peer);
+    connectedPeers.set(call.peer, call);
 
+    // 新しい参加者のビデオ枠を作成
     const container = document.createElement('div');
     container.id = `v-${call.peer}`;
-    container.style.cssText = "position: relative; min-width: 180px; height: 100%; cursor: pointer;";
-
-    const v = document.createElement('video');
-    v.srcObject = stream;
-    v.autoplay = true; v.playsInline = true;
-    v.style.cssText = "width: 100%; height: 100%; object-fit: cover; border-radius: 8px; border: 1px solid #fff;";
+    container.style.cssText = "position: relative; min-width: 220px; height: 100%; cursor: pointer;";
     
+    const v = document.createElement('video');
+    v.srcObject = remoteStream;
+    v.autoplay = true; v.playsInline = true;
+    v.style.cssText = "width: 100%; height: 100%; object-fit: cover; border-radius: 10px; background: #000; border: 1px solid #444;";
+    
+    // クリックでメイン画面（音あり）に切り替え
     container.onclick = () => {
-      bigVideo.srcObject = stream;
-      bigVideo.muted = false; // 相手の声は鳴らす
+      bigVideo.srcObject = remoteStream;
+      bigVideo.muted = false;
     };
     
     container.appendChild(v);
     videoGrid.appendChild(container);
-    statusArea.innerText = `👥 接続中: ${connectedPeers.size}人の参加者`;
+    statusArea.innerText = `接続中: ${connectedPeers.size + 1}名`;
   });
 
   call.on('close', () => {
     document.getElementById(`v-${call.peer}`)?.remove();
     connectedPeers.delete(call.peer);
+    statusArea.innerText = `接続中: ${connectedPeers.size + 1}名`;
   });
 }
 
