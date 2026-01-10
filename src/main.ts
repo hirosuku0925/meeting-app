@@ -1,10 +1,10 @@
 import './style.css'
-import { Peer, DataConnection } from 'peerjs'
+import { Peer, DataConnection, MediaConnection } from 'peerjs'
 import { FaceMesh } from '@mediapipe/face_mesh'
 import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
 import * as webllm from "@mlc-ai/web-llm"
 
-// --- 1. UI構築 (これまでのボタンや設定項目をすべて維持) ---
+// --- 1. UI構築 ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; overflow: hidden; background: #f0f2f5;">
     <div style="flex: 1; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto;">
@@ -60,21 +60,23 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// --- グローバル変数 & 設定 ---
+// --- 2. グローバル変数 ---
 const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const chatBox = document.querySelector<HTMLDivElement>('#chat-box')!;
 const statusEl = document.querySelector<HTMLElement>('#status')!;
 const aiStatus = document.getElementById("ai-status")!;
+const videoGrid = document.querySelector('#video-grid')!;
 
 let isMicOn = true, isAvatarMode = false;
 let imgClose: HTMLImageElement | null = null, imgOpen: HTMLImageElement | null = null, imgBlink: HTMLImageElement | null = null, backgroundImg: HTMLImageElement | null = null;
 let processedStream: MediaStream;
-const connections: Set<DataConnection> = new Set();
+const dataConnections: Map<string, DataConnection> = new Map();
+const remoteVideoIds: Set<string> = new Set();
 let reactions: { emoji: string, time: number }[] = [];
 
-// --- AI (WebLLM) 準備 ---
+// --- 3. AI (WebLLM) 準備 ---
 let engine: webllm.MLCEngine | null = null;
 async function initAI() {
   try {
@@ -90,7 +92,7 @@ async function initAI() {
 }
 initAI();
 
-// --- 画像・アバター描画処理 ---
+// --- 4. 描画処理 (FaceMesh / Segmentation) ---
 const selfie = new SelfieSegmentation({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}` });
 selfie.setOptions({ modelSelection: 1 });
 const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
@@ -141,7 +143,9 @@ faceMesh.onResults((res) => {
   ctx.restore();
 });
 
-// --- チャット・通信処理 ---
+// --- 5. 通信処理 (PeerJS) ---
+const peer = new Peer();
+
 function addChatMessage(name: string, content: string, color: string = "#333") {
   const p = document.createElement('p');
   p.innerHTML = `<b style="color:${color}">${name}:</b> ${content}`;
@@ -149,26 +153,54 @@ function addChatMessage(name: string, content: string, color: string = "#333") {
   chatBox.scrollTop = chatBox.scrollHeight;
 }
 
-const peer = new Peer();
-peer.on('open', (id) => statusEl.innerText = `あなたのID: ${id}`);
+const addVideoToGrid = (peerId: string, stream: MediaStream) => {
+  if (remoteVideoIds.has(peerId)) return;
+  remoteVideoIds.add(peerId);
+
+  const div = document.createElement('div');
+  div.id = `remote-wrap-${peerId}`;
+  div.style.textAlign = "center";
+  div.innerHTML = `<p style="font-size: 10px; color:#666;">ID: ${peerId.slice(0,5)}</p>`;
+  
+  const v = document.createElement('video');
+  v.style.width = "280px"; 
+  v.style.borderRadius = "15px"; 
+  v.srcObject = stream; 
+  v.autoplay = true; 
+  v.playsInline = true;
+  
+  div.appendChild(v);
+  videoGrid.appendChild(div);
+};
 
 const setupConn = (conn: DataConnection) => {
-  connections.add(conn);
+  dataConnections.set(conn.peer, conn);
   conn.on('data', (data: any) => {
     if (data.type === 'chat') addChatMessage(data.name, data.content, data.name === 'nijinai' ? '#ff4d97' : '#333');
     if (data.type === 'reaction') reactions.push({ emoji: data.content, time: Date.now() });
   });
+  conn.on('close', () => {
+    dataConnections.delete(conn.peer);
+    remoteVideoIds.delete(conn.peer);
+    document.getElementById(`remote-wrap-${conn.peer}`)?.remove();
+  });
 };
 
+peer.on('open', (id) => statusEl.innerText = `あなたのID: ${id}`);
 peer.on('connection', setupConn);
-peer.on('call', (call) => {
+peer.on('call', (call: MediaConnection) => {
   call.answer(processedStream);
-  call.on('stream', (stream) => {
-    if (document.getElementById(`remote-${call.peer}`)) return;
-    const div = document.createElement('div'); div.id = `remote-${call.peer}`;
-    const v = document.createElement('video'); v.style.width = "280px"; v.style.borderRadius = "15px"; v.srcObject = stream; v.autoplay = true; v.playsInline = true;
-    div.appendChild(v); document.querySelector('#video-grid')!.appendChild(div);
-  });
+  call.on('stream', (stream) => addVideoToGrid(call.peer, stream));
+});
+
+// --- 6. イベントリスナー ---
+document.querySelector('#connect-btn')?.addEventListener('click', () => {
+  const id = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
+  if (!id || id === peer.id) return;
+  
+  setupConn(peer.connect(id));
+  const call = peer.call(id, processedStream);
+  call.on('stream', (s) => addVideoToGrid(id, s));
 });
 
 document.querySelector('#send-btn')?.addEventListener('click', async () => {
@@ -178,11 +210,10 @@ document.querySelector('#send-btn')?.addEventListener('click', async () => {
 
   const msg = input.value;
   addChatMessage("自分", msg);
-  connections.forEach(c => c.send({ type: 'chat', name, content: msg }));
+  dataConnections.forEach(c => c.send({ type: 'chat', name, content: msg }));
 
-  // AI反応セクション
   if (msg.includes("@nijinai") && engine) {
-    const messages: any[] = [
+    const messages = [
       { role: "system", content: "あなたはnijinaiという猫です。語尾に『にゃ』を付けて、短く可愛く答えて。" },
       { role: "user", content: msg.replace("@nijinai", "") }
     ];
@@ -190,16 +221,15 @@ document.querySelector('#send-btn')?.addEventListener('click', async () => {
       const reply = await engine.chat.completions.create({ messages: messages as any });
       const aiText = reply.choices[0].message.content || "にゃ？";
       addChatMessage("nijinai", aiText, "#ff4d97");
-      connections.forEach(c => c.send({ type: 'chat', name: "nijinai", content: aiText }));
-      // 自動リアクション
+      dataConnections.forEach(c => c.send({ type: 'chat', name: "nijinai", content: aiText }));
       reactions.push({ emoji: '❤️', time: Date.now() });
-      connections.forEach(c => c.send({ type: 'reaction', content: '❤️' }));
+      dataConnections.forEach(c => c.send({ type: 'reaction', content: '❤️' }));
     } catch (e) { addChatMessage("nijinai", "にゃあ、エラーだにゃ...", "#ff4d97"); }
   }
   input.value = "";
 });
 
-// --- その他イベント (以前の機能をすべて復元) ---
+// メディア開始
 navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
   processedStream = canvas.captureStream(30);
   stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
@@ -209,11 +239,12 @@ navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream =>
   loop();
 });
 
+// UIコントロール
 document.querySelectorAll('.react-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const emoji = (btn as HTMLElement).dataset.emoji!;
     reactions.push({ emoji, time: Date.now() });
-    connections.forEach(c => c.send({ type: 'reaction', content: emoji }));
+    dataConnections.forEach(c => c.send({ type: 'reaction', content: emoji }));
   });
 });
 
@@ -228,16 +259,6 @@ const setImg = (id: string, target: string) => {
   });
 };
 setImg('avatar-close', 'close'); setImg('avatar-open', 'open'); setImg('avatar-blink', 'blink'); setImg('bg-upload', 'bg');
-
-document.querySelector('#connect-btn')?.addEventListener('click', () => {
-  const id = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
-  setupConn(peer.connect(id));
-  const call = peer.call(id, processedStream);
-  call.on('stream', (s) => {
-    const v = document.createElement('video'); v.style.width="280px"; v.srcObject=s; v.autoplay=true;
-    document.querySelector('#video-grid')?.appendChild(v);
-  });
-});
 
 document.querySelector('#camera-btn')?.addEventListener('click', () => {
   const t = (video.srcObject as MediaStream).getVideoTracks()[0]; t.enabled = !t.enabled;
