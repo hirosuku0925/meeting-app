@@ -3,11 +3,11 @@ import { Peer } from 'peerjs'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; background: #1a1a1a; color: white; overflow: hidden;">
-    <div style="width: 260px; background: #2c3e50; padding: 20px; display: flex; flex-direction: column; gap: 15px; z-index: 10;">
+    <div style="width: 260px; background: #2c3e50; padding: 20px; display: flex; flex-direction: column; gap: 15px; z-index: 10; box-shadow: 2px 0 10px rgba(0,0,0,0.5);">
       <h2 style="color: #3498db; margin: 0; font-size: 20px;">🌐 AI会議室</h2>
       
       <div style="display: flex; flex-direction: column; gap: 8px;">
-        <input id="room-id-input" type="text" placeholder="ルーム名" style="padding: 10px; border-radius: 5px; border: none; color: #333;">
+        <input id="room-id-input" type="text" placeholder="ルーム名（英数字）" style="padding: 10px; border-radius: 5px; border: none; color: #333;">
         <input id="room-pass-input" type="password" placeholder="パスワード" style="padding: 10px; border-radius: 5px; border: none; color: #333;">
         <button id="join-room-btn" style="background: #3498db; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-weight: bold;">会議に参加する</button>
       </div>
@@ -15,7 +15,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div id="status-area" style="font-size: 11px; color: #2ecc71; text-align: center; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 5px; min-height: 40px;">待機中</div>
 
       <div style="margin-top: auto; display: flex; flex-direction: column; gap: 10px;">
-        <button id="hangup-btn" style="background: #e74c3c; color: white; border: none; padding: 10px; border-radius: 8px; cursor: pointer; font-weight: bold;">退出</button>
+        <button id="hangup-btn" style="background: #e74c3c; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-weight: bold;">退出</button>
         <div style="font-size: 10px; color: #95a5a6; text-align: center; line-height: 1.4;">
           音源提供：<a href="https://otologic.jp" target="_blank" style="color: #3498db; text-decoration: none;">OtoLogic</a><br>
           (ライセンス：CC BY 4.0)
@@ -63,27 +63,31 @@ async function init() {
 
 // 参加ボタンのクリック
 document.querySelector('#join-room-btn')?.addEventListener('click', () => {
-  joinSound.play().catch(() => {}); // ★ここがエラー箇所の解消！
+  joinSound.play().catch(() => {});
 
-  const room = (document.getElementById('room-id-input') as HTMLInputElement).value.replace(/[^a-zA-Z0-9]/g, "");
-  const pass = (document.getElementById('room-pass-input') as HTMLInputElement).value.replace(/[^a-zA-Z0-9]/g, "");
+  const room = (document.getElementById('room-id-input') as HTMLInputElement).value.trim().replace(/[^a-zA-Z0-9]/g, "");
+  const pass = (document.getElementById('room-pass-input') as HTMLInputElement).value.trim().replace(/[^a-zA-Z0-9]/g, "");
   
-  if (!room || !pass) return alert("英数字で入力してください");
+  if (!room || !pass) return alert("ルーム名とパスワードを英数字で入力してください");
 
   if (peer) peer.destroy();
   connectedPeers.clear();
 
+  // あなたの席番号をランダムに決定
   const myNum = Math.floor(Math.random() * 15) + 1;
-  peer = new Peer(`room_${room}_${pass}_${myNum}`);
+  // Zoomのように「共通の部屋鍵」を作る
+  const roomKey = `vroom-${room}-${pass}`;
+  
+  peer = new Peer(`${roomKey}-${myNum}`);
 
   peer.on('open', (id) => {
-    statusArea.innerText = `入室完了！ID: ${id}`;
+    statusArea.innerHTML = `<span style="color: #3498db;">入室完了！</span><br><span style="font-size: 10px;">ID: ${id}</span>`;
     
-    // 3秒おきに他席をスキャン
+    // 3秒おきに、同じ部屋鍵を持つ1〜15番の誰かを探して電話する
     setInterval(() => {
       for (let i = 1; i <= 15; i++) {
         if (i === myNum) continue;
-        const targetID = `room_${room}_${pass}_${i}`;
+        const targetID = `${roomKey}-${i}`;
         if (!connectedPeers.has(targetID)) {
           const call = peer!.call(targetID, localStream);
           if (call) setupCallHandlers(call);
@@ -103,7 +107,7 @@ function setupCallHandlers(call: any) {
     if (connectedPeers.has(call.peer)) return;
     connectedPeers.set(call.peer, call);
     
-    peerJoinSound.play().catch(() => {}); // ★ここがエラー箇所の解消！
+    peerJoinSound.play().catch(() => {});
 
     const container = document.createElement('div');
     container.id = `v-${call.peer}`;
@@ -114,7 +118,7 @@ function setupCallHandlers(call: any) {
     
     container.onclick = () => {
       bigVideo.srcObject = stream;
-      bigVideo.muted = false;
+      bigVideo.muted = false; // 大きく映した人の音を出す
     };
     container.appendChild(v);
     videoGrid.appendChild(container);
@@ -122,14 +126,15 @@ function setupCallHandlers(call: any) {
   });
 
   call.on('close', () => {
-    document.getElementById(`v-${call.peer}`)?.remove();
+    const el = document.getElementById(`v-${call.peer}`);
+    if (el) el.remove();
     connectedPeers.delete(call.peer);
+    statusArea.innerText = `接続中: ${connectedPeers.size + 1}名`;
   });
 }
 
-// 退出ボタン
 document.querySelector('#hangup-btn')?.addEventListener('click', () => {
-  exitSound.play().catch(() => {}); // ★ここがエラー箇所の解消！
+  exitSound.play().catch(() => {});
   setTimeout(() => location.reload(), 500);
 });
 
