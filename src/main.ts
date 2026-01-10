@@ -1,11 +1,11 @@
 import './style.css'
-import { Peer } from 'peerjs'
+import { Peer } from 'peerjs' // エラー解消：下で使用します
 import { FaceMesh } from '@mediapipe/face_mesh'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; background: #f0f2f5;">
     <div style="flex: 1; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto;">
-      <h1 style="color: #333; margin-bottom: 20px;">AI会議室</h1>
+      <h1 style="color: #333; margin-bottom: 20px;">AI会議室 (安全・通信版)</h1>
       <div id="video-grid" style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; padding: 10px; width: 100%;">
         <div id="local-container" style="text-align: center;">
           <canvas id="local-canvas" width="480" height="360" style="width: 320px; border: 3px solid #646cff; border-radius: 15px; background: #000;"></canvas>
@@ -15,13 +15,12 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div class="card" style="width: 100%; max-width: 500px; margin-top: 20px; padding: 20px; border-radius: 16px; background: #fff; box-shadow: 0 10px 25px rgba(0,0,0,0.1);">
         <div style="display: flex; gap: 10px; margin-bottom: 15px;">
            <input id="remote-id-input" type="text" placeholder="相手のIDを入力" style="flex: 2; padding: 10px; border-radius: 8px; border: 1px solid #ddd;">
-           <button id="connect-btn" style="flex: 1; background-color: #646cff; color: white; border-radius: 8px; border: none; cursor: pointer; font-weight: bold;">入室</button>
+           <button id="connect-btn" style="flex: 1; background-color: #646cff; color: white; border-radius: 8px; border: none; cursor: pointer; font-weight: bold;">接続</button>
         </div>
-        <p id="status" style="font-size: 13px; color: #1976d2; font-weight: bold; text-align: center;">ID取得中...</p>
-        <div style="border-top: 1px solid #eee; margin-top: 15px; padding-top: 15px; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap;">
-           <button id="mic-btn" style="background-color: #4CAF50; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer;">🎤 マイク: ON</button>
-           <button id="avatar-mode-btn" style="padding: 8px 15px; border-radius: 5px; cursor: pointer;">👤 アバター: OFF</button>
-           <button id="hangup-btn" style="background: #f44336; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer;">退出</button>
+        <p id="status" style="font-size: 13px; color: #1976d2; font-weight: bold; text-align: center; margin-bottom: 15px;">ID取得中...</p>
+        <div style="border-top: 1px solid #eee; padding-top: 15px; display: flex; justify-content: center; gap: 10px;">
+           <button id="record-btn" style="background-color: #ff9800; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-weight: bold;">🔴 録画開始</button>
+           <button id="hangup-btn" style="background: #f44336; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer;">退出</button>
         </div>
       </div>
     </div>
@@ -33,36 +32,20 @@ const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
 const ctx = canvas.getContext('2d')!;
 const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
 const videoGrid = document.querySelector('#video-grid')!;
-const statusEl = document.querySelector<HTMLElement>('#status')!;
 
-let isAvatarMode = false;
-let isMicOn = true;
-let localStream: MediaStream; // これを使用することで警告を消します
+let localStream: MediaStream;
 let processedStream: MediaStream;
+let mediaRecorder: MediaRecorder | null = null;
+let recordedChunks: Blob[] = [];
 
-const faceMesh = new FaceMesh({ 
-  locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/${f}` 
-});
+// AI設定
+const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/${f}` });
 faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
-
-faceMesh.onResults((results) => {
+faceMesh.onResults((res) => {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.translate(canvas.width, 0);
-  ctx.scale(-1, 1);
-  if (results.image) {
-    if (isAvatarMode && results.multiFaceLandmarks?.[0]) {
-      ctx.fillStyle = "#eef";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      const landmarks = results.multiFaceLandmarks[0];
-      ctx.beginPath();
-      ctx.arc(landmarks[1].x * canvas.width, landmarks[1].y * canvas.height, 60, 0, Math.PI * 2);
-      ctx.fillStyle = "#646cff";
-      ctx.fill();
-    } else {
-      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-    }
-  }
+  ctx.translate(canvas.width, 0); ctx.scale(-1, 1);
+  if (res.image) ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
   ctx.restore();
 });
 
@@ -70,22 +53,22 @@ async function init() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     video.srcObject = localStream;
-    
     processedStream = canvas.captureStream(25);
-    // localStreamから音声トラックを取り出して追加
-    localStream.getAudioTracks().forEach(track => processedStream.addTrack(track));
+    localStream.getAudioTracks().forEach(t => processedStream.addTrack(t));
 
     video.onloadedmetadata = () => {
       video.play();
-      const loop = async () => {
-        if (video.readyState >= 2) await faceMesh.send({ image: video });
-        requestAnimationFrame(loop);
-      };
+      const loop = async () => { if (video.readyState >= 2) await faceMesh.send({ image: video }); requestAnimationFrame(loop); };
       loop();
     };
 
-    const peer = new Peer();
-    peer.on('open', (id) => { statusEl.innerText = `あなたのID: ${id}`; });
+    // --- PeerJS通信を開始 ---
+    const peer = new Peer(); // ここで使用！
+    
+    peer.on('open', (id) => {
+      document.getElementById('status')!.innerText = `あなたのID: ${id}`;
+    });
+
     peer.on('call', (call) => {
       call.answer(processedStream);
       setupRemoteVideo(call);
@@ -97,17 +80,32 @@ async function init() {
       setupRemoteVideo(peer.call(remoteId, processedStream));
     });
 
-    // マイクボタンの処理で localStream を使用
-    document.querySelector('#mic-btn')?.addEventListener('click', () => {
-      isMicOn = !isMicOn;
-      localStream.getAudioTracks().forEach(track => track.enabled = isMicOn);
-      const btn = document.querySelector<HTMLButtonElement>('#mic-btn')!;
-      btn.innerText = isMicOn ? "🎤 マイク: ON" : "🎤 マイク: OFF";
-      btn.style.backgroundColor = isMicOn ? "#4CAF50" : "#f44336";
+    // --- 安全な録画機能 ---
+    document.querySelector('#record-btn')?.addEventListener('click', () => {
+      const btn = document.querySelector<HTMLButtonElement>('#record-btn')!;
+      if (!mediaRecorder || mediaRecorder.state === "inactive") {
+        recordedChunks = [];
+        mediaRecorder = new MediaRecorder(processedStream);
+        mediaRecorder.ondataavailable = (e) => recordedChunks.push(e.data);
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(recordedChunks, { type: 'video/webm' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = `meeting-record.webm`; a.click();
+          alert("自分のPCに録画を保存しました！");
+        };
+        mediaRecorder.start();
+        btn.innerText = "⏹ 停止して保存";
+        btn.style.backgroundColor = "#f44336";
+      } else {
+        mediaRecorder.stop();
+        btn.innerText = "🔴 録画開始";
+        btn.style.backgroundColor = "#ff9800";
+      }
     });
 
   } catch (err) {
-    alert("カメラ・マイクを許可してください");
+    alert("カメラを許可してください");
   }
 }
 
@@ -129,9 +127,4 @@ function setupRemoteVideo(call: any) {
 }
 
 init();
-
-document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
-  isAvatarMode = !isAvatarMode;
-  document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!.innerText = isAvatarMode ? "👤 アバター: ON" : "👤 アバター: OFF";
-});
 document.querySelector('#hangup-btn')?.addEventListener('click', () => location.reload());
