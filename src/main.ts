@@ -4,17 +4,22 @@ import { Peer } from 'peerjs'
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; background: #1a1a1a; color: white; overflow: hidden;">
     <div style="width: 260px; background: #2c3e50; padding: 20px; display: flex; flex-direction: column; gap: 15px; z-index: 10;">
-      <h2 style="color: #3498db; margin: 0; font-size: 20px;">🌐 3人以上対応ルーム</h2>
+      <h2 style="color: #3498db; margin: 0; font-size: 20px;">🌐 復活！AI会議室</h2>
       <div style="display: flex; flex-direction: column; gap: 8px;">
         <input id="room-id-input" type="text" placeholder="ルーム名" style="padding: 10px; border-radius: 5px; border: none; color: #333;">
         <input id="room-pass-input" type="password" placeholder="パスワード" style="padding: 10px; border-radius: 5px; border: none; color: #333;">
         <button id="join-room-btn" style="background: #3498db; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-weight: bold;">参加する</button>
       </div>
-      <div id="status-area" style="font-size: 11px; color: #2ecc71; text-align: center; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 5px; min-height: 40px;">待機中</div>
-      <div style="margin-top: auto; display: flex; flex-direction: column; gap: 10px;">
-        <button id="hangup-btn" style="background: #e74c3c; color: white; border: none; padding: 10px; border-radius: 8px; cursor: pointer; font-weight: bold;">退出</button>
+      
+      <div id="status-area" style="font-size: 11px; padding: 10px; border-radius: 5px; background: rgba(0,0,0,0.3); border-left: 4px solid #95a5a6;">
+        カメラ準備中...
+      </div>
+
+      <div style="margin-top: auto;">
+        <button id="hangup-btn" style="background: #e74c3c; color: white; border: none; padding: 10px; border-radius: 8px; cursor: pointer; width: 100%;">リセット（退出）</button>
       </div>
     </div>
+    
     <div style="flex: 1; display: flex; flex-direction: column; background: #000;">
       <div id="main-display" style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px;">
         <video id="big-video" autoplay playsinline muted style="max-width: 100%; max-height: 100%; border-radius: 12px;"></video>
@@ -42,37 +47,52 @@ async function init() {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     localVideo.srcObject = localStream;
     bigVideo.srcObject = localStream;
-  } catch (e) { statusArea.innerText = "カメラ許可エラー"; }
+    statusArea.innerText = "準備完了！ルーム名を入れて参加してね";
+    statusArea.style.borderLeftColor = "#2ecc71";
+  } catch (e) {
+    statusArea.innerText = "カメラが見つかりません。許可を確認してください。";
+    statusArea.style.borderLeftColor = "#e74c3c";
+  }
 }
 
-function join(retryCount = 0) {
+function join() {
   const room = (document.getElementById('room-id-input') as HTMLInputElement).value.trim();
   const pass = (document.getElementById('room-pass-input') as HTMLInputElement).value.trim();
-  if (!room || !pass) return alert("入力してください");
+  
+  if (!room || !pass) return alert("ルーム名とパスを入力してね");
 
-  if (peer) peer.destroy();
-  connectedPeers.clear();
+  if (peer) {
+    peer.destroy();
+    connectedPeers.clear();
+  }
 
-  // 1〜20番まで席を増やして被りにくくしました
+  statusArea.innerText = "接続中...";
+  statusArea.style.borderLeftColor = "#f1c40f";
+
   const myNum = Math.floor(Math.random() * 20) + 1;
   const roomKey = `vroom-${room}-${pass}`;
+  
+  // PeerJSサーバーへの接続
   peer = new Peer(`${roomKey}-${myNum}`);
 
-  peer.on('open', () => {
-    statusArea.innerText = `入室成功！(席:${myNum})\n他の人を探しています...`;
-    
-    // 3秒おきに全員（1-20番）に接続を試みる
-    setInterval(() => {
-      if (!peer || peer.destroyed) return;
+  peer.on('open', (id) => {
+    statusArea.innerHTML = `<b style="color:#2ecc71">入室成功！</b><br>ID: ${id}<br>相手を探しています...`;
+    statusArea.style.borderLeftColor = "#2ecc71";
+
+    // 他の席(1-20)をスキャン
+    const scanInterval = setInterval(() => {
+      if (!peer || peer.destroyed) {
+        clearInterval(scanInterval);
+        return;
+      }
       for (let i = 1; i <= 20; i++) {
-        if (i === myNum) continue;
         const targetID = `${roomKey}-${i}`;
-        if (!connectedPeers.has(targetID)) {
+        if (i !== myNum && !connectedPeers.has(targetID)) {
           const call = peer.call(targetID, localStream);
           if (call) handleCall(call);
         }
       }
-    }, 3000);
+    }, 4000);
   });
 
   peer.on('call', (call) => {
@@ -81,10 +101,12 @@ function join(retryCount = 0) {
   });
 
   peer.on('error', (err) => {
-    // 席が被っていたら自動でもう一度別の番号で入り直す
-    if (err.type === 'unavailable-id' && retryCount < 5) {
-      console.log("席が被ったので取り直します...");
-      join(retryCount + 1);
+    console.error("PeerJS Error:", err.type);
+    statusArea.innerHTML = `<b style="color:#e74c3c">エラー発生</b><br>${err.type}`;
+    statusArea.style.borderLeftColor = "#e74c3c";
+    
+    if (err.type === 'unavailable-id') {
+      setTimeout(() => join(), 1000); // 席被りの場合は自動で再試行
     }
   });
 }
