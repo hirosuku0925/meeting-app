@@ -1,7 +1,7 @@
 import './style.css'
 import { Peer } from 'peerjs'
 
-// 余白リセットとCSS
+// --- スタイル設定（Zoom風・全画面） ---
 const globalStyle = document.createElement('style');
 globalStyle.textContent = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -14,12 +14,13 @@ globalStyle.textContent = `
 `;
 document.head.appendChild(globalStyle);
 
+// --- HTML構造（全部入りレイアウト） ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; width: 100%; flex-direction: column;">
     
     <div id="main-display" style="height: 60vh; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
-      <video id="big-video" autoplay playsinline style="width: 100%; height: 100%; object-fit: contain;"></video>
-      <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 10;">カメラ準備中...</div>
+      <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain;"></video>
+      <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 10;">準備中...</div>
       
       <div id="chat-box" style="display:none; position: absolute; right: 10px; top: 10px; bottom: 10px; width: 220px; background: rgba(30,30,30,0.9); border-radius: 8px; flex-direction: column; border: 1px solid #444; z-index: 100;">
         <div style="padding: 8px; border-bottom: 1px solid #444; font-size: 12px; font-weight: bold;">チャット</div>
@@ -52,7 +53,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// 型定義と要素取得
+// --- プログラム処理 ---
 const bigVideo = document.querySelector<HTMLVideoElement>('#big-video')!;
 const localVideo = document.querySelector<HTMLVideoElement>('#local-video')!;
 const videoGrid = document.querySelector<HTMLElement>('#video-grid')!;
@@ -66,36 +67,37 @@ const connectedPeers = new Set<string>();
 let recorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
 
-// 初期化
+// 1. 初期化（ハウリング防止設定）
 async function init() {
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    localStream = await navigator.mediaDevices.getUserMedia({ 
+      video: true, 
+      audio: { echoCancellation: true, noiseSuppression: true } 
+    });
     localVideo.srcObject = localStream;
     bigVideo.srcObject = localStream;
-    statusBadge.innerText = "準備完了！ルーム名を入力してください";
+    statusBadge.innerText = "準備完了！ルーム名を入力して参加してください";
   } catch (e) {
     statusBadge.innerText = "カメラエラー！許可してください";
   }
 }
 
-// ボタン機能：マイク・カメラ
+// 2. ボタン操作（マイク・カメラ）
 document.querySelector('#mic-btn')?.addEventListener('click', (e) => {
   const track = localStream.getAudioTracks()[0];
   track.enabled = !track.enabled;
   (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
 });
-
 document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
   const track = localStream.getVideoTracks()[0];
   track.enabled = !track.enabled;
   (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
 });
 
-// チャット
+// 3. チャット機能
 document.querySelector('#chat-toggle-btn')?.addEventListener('click', () => {
   chatBox.style.display = chatBox.style.display === 'none' ? 'flex' : 'none';
 });
-
 document.querySelector('#chat-send-btn')?.addEventListener('click', () => {
   const input = document.querySelector<HTMLInputElement>('#chat-input')!;
   if (!input.value) return;
@@ -105,7 +107,7 @@ document.querySelector('#chat-send-btn')?.addEventListener('click', () => {
   input.value = "";
 });
 
-// 録画機能
+// 4. 録画機能
 document.querySelector('#record-btn')?.addEventListener('click', (e) => {
   const btn = e.currentTarget as HTMLElement;
   if (!recorder || recorder.state === 'inactive') {
@@ -128,17 +130,16 @@ document.querySelector('#record-btn')?.addEventListener('click', (e) => {
   }
 });
 
-// 背景・アバター
-document.querySelector('#bg-btn')?.addEventListener('click', () => alert("背景ぼかし機能を読み込んでいます..."));
+// 5. 背景・アバター（デモ）
+document.querySelector('#bg-btn')?.addEventListener('click', () => alert("背景ぼかし機能を起動中..."));
 document.querySelector('#avatar-btn')?.addEventListener('click', () => alert("アバターモード準備中..."));
 
-// 接続ロジック（強化版）
+// 6. 接続ロジック（強化版）
 function join() {
   const room = (document.querySelector<HTMLInputElement>('#room-input')!).value.trim();
   if (!room) return alert("ルーム名を入力してください");
-
-  const roomKey = `zoom-all-in-one-${room}`;
-  statusBadge.innerText = "接続中...";
+  const roomKey = `vFINAL-${room}`;
+  statusBadge.innerText = "サーバー接続中...";
   tryNextSeat(roomKey, 1);
 }
 
@@ -148,8 +149,6 @@ function tryNextSeat(roomKey: string, seat: number) {
 
   peer.on('open', () => {
     statusBadge.innerText = `${seat}番席で入室。相手を探しています...`;
-    
-    // 自動コール機能
     const interval = setInterval(() => {
       if (!peer || peer.destroyed) return clearInterval(interval);
       for (let i = 1; i < seat; i++) {
@@ -182,15 +181,10 @@ function handleCall(call: any) {
     v.id = call.peer;
     v.srcObject = stream; v.autoplay = true; v.playsInline = true;
     v.style.cssText = "height: 100%; min-width: 180px; border-radius: 8px; background: #222; object-fit: cover; cursor: pointer;";
-    v.onclick = () => { bigVideo.srcObject = stream; };
+    v.onclick = () => { bigVideo.srcObject = stream; bigVideo.muted = false; };
     videoGrid.appendChild(v);
     bigVideo.srcObject = stream;
-    statusBadge.innerText = `接続完了！ (${connectedPeers.size + 1}名)`;
-  });
-
-  call.on('close', () => {
-    document.getElementById(call.peer)?.remove();
-    connectedPeers.delete(call.peer);
+    bigVideo.muted = false; // 相手の映像は音を出す
   });
 }
 
