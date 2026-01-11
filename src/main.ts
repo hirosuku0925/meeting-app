@@ -1,7 +1,7 @@
 import './style.css'
 import { Peer } from 'peerjs'
 
-// --- 1. スタイル（お母さんの好きなデザイン） ---
+// --- 1. スタイル（お母さん公認デザイン） ---
 const globalStyle = document.createElement('style');
 globalStyle.textContent = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -15,7 +15,7 @@ globalStyle.textContent = `
 `;
 document.head.appendChild(globalStyle);
 
-// --- 2. レイアウト（機能ボタンが並ぶ使い慣れた形） ---
+// --- 2. レイアウト（使い慣れたボタン配置） ---
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; width: 100%; flex-direction: column;">
     <div id="main-display" style="flex: 1; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
@@ -40,7 +40,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-// --- 3. プログラム処理（エラー対策済み） ---
+// --- 3. プログラム処理 ---
 const bigVideo = document.querySelector<HTMLVideoElement>('#big-video')!;
 const localVideo = document.querySelector<HTMLVideoElement>('#local-video')!;
 const avatarCanvas = document.querySelector<HTMLCanvasElement>('#avatar-canvas')!;
@@ -53,7 +53,10 @@ let isAvatarMode = false;
 let isMouthOpen = false;
 let pupilOffset = { x: 0, y: 0 };
 
+// 口パクタイマー
 setInterval(() => { if (isAvatarMode) isMouthOpen = !isMouthOpen; }, 300);
+
+// キー操作で黒目を動かす
 window.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowRight') pupilOffset.x = 20;
   if (e.key === 'ArrowLeft')  pupilOffset.x = -20;
@@ -62,6 +65,7 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', () => { pupilOffset = { x: 0, y: 0 }; });
 
+// アバター描画処理（確実に読み込むための工夫付き）
 async function drawAvatar() {
   if (!isAvatarMode) return;
   avatarCanvas.width = 400; avatarCanvas.height = 400;
@@ -70,26 +74,29 @@ async function drawAvatar() {
   const draw = (src: string, x = 0, y = 0) => {
     return new Promise((resolve) => {
       const img = new Image();
-      img.src = src;
+      // キャッシュ（古いデータ）を回避して最新を読み込むための ?v=...
+      img.src = src + "?v=" + new Date().getTime();
       img.onload = () => { ctx.drawImage(img, x, y, 400, 400); resolve(true); };
       img.onerror = () => resolve(false);
     });
   };
 
+  // publicフォルダの画像たちを重ねて描く
   await draw('/cat-face.png');
   await draw('/eye-base.png');
   await draw('/eye-pupil.png', pupilOffset.x, pupilOffset.y);
   await draw(isMouthOpen ? '/cat-mouth-open.png' : '/cat-mouth-close.png');
-  requestAnimationFrame(drawAvatar);
+  
+  if (isAvatarMode) requestAnimationFrame(drawAvatar);
 }
 
+// ルーム参加処理
 async function join() {
   const room = (document.querySelector<HTMLInputElement>('#room-input')!).value.trim();
   if (!room) return;
   if (peer) peer.destroy();
   peer = new Peer(`cat-room-${room}-${Math.floor(Math.random()*100)}`);
   
-  // innerTextのエラー対策
   peer.on('open', () => { 
     const badge = document.querySelector('#status-badge') as HTMLElement;
     if (badge) badge.innerText = `部屋: ${room}`; 
@@ -107,6 +114,7 @@ async function join() {
   });
 }
 
+// ボタンイベント
 document.querySelector('#avatar-btn')?.addEventListener('click', () => {
   isAvatarMode = !isAvatarMode;
   avatarCanvas.style.display = isAvatarMode ? 'block' : 'none';
@@ -115,6 +123,7 @@ document.querySelector('#avatar-btn')?.addEventListener('click', () => {
 });
 document.querySelector('#join-btn')?.addEventListener('click', join);
 
+// 初期化（カメラ起動）
 async function init() {
   localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
   localVideo.srcObject = localStream; bigVideo.srcObject = localStream;
