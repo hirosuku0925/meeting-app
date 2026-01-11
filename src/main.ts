@@ -4,7 +4,7 @@ import { Peer } from 'peerjs'
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; background: #1a1a1a; color: white; overflow: hidden;">
     <div style="width: 260px; background: #2c3e50; padding: 20px; display: flex; flex-direction: column; gap: 15px; z-index: 10;">
-      <h2 style="color: #3498db; margin: 0; font-size: 20px;">🌐 確定合流会議室</h2>
+      <h2 style="color: #3498db; margin: 0; font-size: 20px;">🌐 3人以上対応ルーム</h2>
       <div style="display: flex; flex-direction: column; gap: 8px;">
         <input id="room-id-input" type="text" placeholder="ルーム名" style="padding: 10px; border-radius: 5px; border: none; color: #333;">
         <input id="room-pass-input" type="password" placeholder="パスワード" style="padding: 10px; border-radius: 5px; border: none; color: #333;">
@@ -13,7 +13,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div id="status-area" style="font-size: 11px; color: #2ecc71; text-align: center; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 5px; min-height: 40px;">待機中</div>
       <div style="margin-top: auto; display: flex; flex-direction: column; gap: 10px;">
         <button id="hangup-btn" style="background: #e74c3c; color: white; border: none; padding: 10px; border-radius: 8px; cursor: pointer; font-weight: bold;">退出</button>
-        <div style="font-size: 10px; color: #95a5a6; text-align: center;">音源引用: OtoLogic</div>
       </div>
     </div>
     <div style="flex: 1; display: flex; flex-direction: column; background: #000;">
@@ -29,7 +28,6 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   </div>
 `
 
-const playSnd = (url: string) => { new Audio(url).play().catch(() => {}); };
 const localVideo = document.querySelector<HTMLVideoElement>('#local-video')!;
 const bigVideo = document.querySelector<HTMLVideoElement>('#big-video')!;
 const videoGrid = document.querySelector('#video-grid')!;
@@ -44,38 +42,37 @@ async function init() {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     localVideo.srcObject = localStream;
     bigVideo.srcObject = localStream;
-  } catch (e) { statusArea.innerText = "カメラを許可してください"; }
+  } catch (e) { statusArea.innerText = "カメラ許可エラー"; }
 }
 
-document.querySelector('#join-room-btn')?.addEventListener('click', () => {
-  playSnd('https://otologic.jp/free/se/bin/decision01.mp3');
+function join(retryCount = 0) {
   const room = (document.getElementById('room-id-input') as HTMLInputElement).value.trim();
   const pass = (document.getElementById('room-pass-input') as HTMLInputElement).value.trim();
-  if (!room || !pass) return alert("ルーム名とパスワードを入力してください");
+  if (!room || !pass) return alert("入力してください");
 
   if (peer) peer.destroy();
   connectedPeers.clear();
 
-  const myNum = Math.floor(Math.random() * 10) + 1;
+  // 1〜20番まで席を増やして被りにくくしました
+  const myNum = Math.floor(Math.random() * 20) + 1;
   const roomKey = `vroom-${room}-${pass}`;
   peer = new Peer(`${roomKey}-${myNum}`);
 
   peer.on('open', () => {
-    statusArea.innerText = `入室成功(席:${myNum})\n相手を探しています...`;
+    statusArea.innerText = `入室成功！(席:${myNum})\n他の人を探しています...`;
     
-    // ★しつこく探し続ける機能 (5秒おきにリトライ)
+    // 3秒おきに全員（1-20番）に接続を試みる
     setInterval(() => {
       if (!peer || peer.destroyed) return;
-      for (let i = 1; i <= 10; i++) {
+      for (let i = 1; i <= 20; i++) {
         if (i === myNum) continue;
         const targetID = `${roomKey}-${i}`;
-        // まだ繋がっていない席にだけ、繰り返し電話をかける
         if (!connectedPeers.has(targetID)) {
           const call = peer.call(targetID, localStream);
           if (call) handleCall(call);
         }
       }
-    }, 5000); 
+    }, 3000);
   });
 
   peer.on('call', (call) => {
@@ -84,17 +81,18 @@ document.querySelector('#join-room-btn')?.addEventListener('click', () => {
   });
 
   peer.on('error', (err) => {
-    if (err.type === 'unavailable-id') {
-      statusArea.innerText = "席が被りました。もう一度押してください。";
+    // 席が被っていたら自動でもう一度別の番号で入り直す
+    if (err.type === 'unavailable-id' && retryCount < 5) {
+      console.log("席が被ったので取り直します...");
+      join(retryCount + 1);
     }
   });
-});
+}
 
 function handleCall(call: any) {
   call.on('stream', (stream: MediaStream) => {
     if (connectedPeers.has(call.peer)) return;
     connectedPeers.add(call.peer);
-    playSnd('https://otologic.jp/free/se/bin/pon01.mp3');
 
     const container = document.createElement('div');
     container.id = `v-${call.peer}`;
@@ -115,6 +113,7 @@ function handleCall(call: any) {
   });
 }
 
+document.querySelector('#join-room-btn')?.addEventListener('click', () => join());
 document.querySelector('#hangup-btn')?.addEventListener('click', () => location.reload());
 
 init();
