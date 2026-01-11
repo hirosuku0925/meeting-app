@@ -1,12 +1,12 @@
 import './style.css'
 import { Peer } from 'peerjs'
 
+// 全体の余白を消す
 const globalStyle = document.createElement('style');
 globalStyle.textContent = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body, html { width: 100%; height: 100%; overflow: hidden; background: #000; }
-  .tool-btn { background: #333; border: none; color: white; font-size: 18px; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; transition: 0.2s; }
-  .tool-btn:hover { background: #444; }
+  .tool-btn { background: #333; border: none; color: white; font-size: 18px; width: 45px; height: 45px; border-radius: 50%; cursor: pointer; }
   .off { background: #ea4335 !important; }
 `;
 document.head.appendChild(globalStyle);
@@ -16,7 +16,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div id="main-display" style="flex: 1; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center;">
       <video id="big-video" autoplay playsinline style="width: 100%; height: 100%; object-fit: contain;"></video>
       <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 10;">
-        カメラ起動中...
+        カメラを起動しています...
       </div>
     </div>
 
@@ -24,7 +24,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <button id="mic-btn" class="tool-btn">🎤</button>
       <button id="cam-btn" class="tool-btn">📹</button>
       <div style="width: 1px; height: 40px; background: #444;"></div>
-      <input id="room-input" type="text" placeholder="例: room777" style="background: #222; border: 1px solid #444; color: white; padding: 10px; border-radius: 5px; width: 120px;">
+      <input id="room-input" type="text" placeholder="ルーム名" style="background: #222; border: 1px solid #444; color: white; padding: 10px; border-radius: 5px; width: 120px;">
       <button id="join-btn" style="background: #2ecc71; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: bold;">参加</button>
       <button id="exit-btn" style="background: #444; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer;">リセット</button>
     </div>
@@ -44,37 +44,42 @@ let localStream: MediaStream;
 let peer: Peer | null = null;
 const connectedPeers = new Set<string>();
 
+// 初期化
 async function init() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     localVideo.srcObject = localStream;
     bigVideo.srcObject = localStream;
-    statusBadge.innerText = "準備完了。ルーム名を入れてください";
+    statusBadge.innerText = "準備完了！ルーム名を入力してください";
   } catch (e) {
-    statusBadge.innerText = "カメラエラー！許可が必要です";
+    statusBadge.innerText = "カメラが見つかりません";
   }
 }
 
+// 参加処理
 function join() {
   const room = (document.querySelector<HTMLInputElement>('#room-input')!).value.trim();
   if (!room) return alert("ルーム名を入力してください");
 
-  statusBadge.innerText = "接続中...";
-  const roomKey = `vF-${room}`;
-  // 3人目が確実に繋がるよう、席番号は 1, 2, 3... と試行する
-  tryJoin(roomKey, 1);
+  const roomKey = `room-${room}`;
+  statusBadge.innerText = "サーバー接続中...";
+  
+  // 1番から順に空いている席を探す
+  tryNextSeat(roomKey, 1);
 }
 
-function tryJoin(roomKey: string, seat: number) {
+function tryNextSeat(roomKey: string, seat: number) {
   if (peer) peer.destroy();
   peer = new Peer(`${roomKey}-${seat}`);
 
   peer.on('open', () => {
-    statusBadge.innerText = `入室成功 (${seat}番席)。相手を探しています...`;
+    statusBadge.innerText = `${seat}番席で入室しました。相手を探しています...`;
     
-    // 【重要】自分より前の番号の人全員に電話をかける
-    setInterval(() => {
-      if (!peer || peer.destroyed) return;
+    // 相手を探して自分から電話をかける（これが重要！）
+    const searcher = setInterval(() => {
+      if (!peer || peer.destroyed) return clearInterval(searcher);
+      
+      // 自分より若い番号の人（先にいる人）全員にコールする
       for (let i = 1; i < seat; i++) {
         const targetId = `${roomKey}-${i}`;
         if (!connectedPeers.has(targetId)) {
@@ -92,9 +97,10 @@ function tryJoin(roomKey: string, seat: number) {
 
   peer.on('error', (err) => {
     if (err.type === 'unavailable-id') {
-      tryJoin(roomKey, seat + 1); // 席が埋まっていたら次の席へ
+      tryNextSeat(roomKey, seat + 1); // 席が埋まってたら次へ
     } else {
-      statusBadge.innerText = "接続エラー";
+      console.error(err);
+      statusBadge.innerText = "エラーが発生しました";
     }
   });
 }
@@ -105,14 +111,16 @@ function handleCall(call: any) {
 
   call.on('stream', (stream: MediaStream) => {
     if (document.getElementById(call.peer)) return;
+    
     const v = document.createElement('video');
     v.id = call.peer;
     v.srcObject = stream; v.autoplay = true; v.playsInline = true;
     v.style.cssText = "height: 100%; min-width: 180px; border-radius: 8px; background: #222; object-fit: cover; cursor: pointer;";
     v.onclick = () => { bigVideo.srcObject = stream; };
+    
     videoGrid.appendChild(v);
     bigVideo.srcObject = stream;
-    statusBadge.innerText = `接続中: ${connectedPeers.size + 1}名`;
+    statusBadge.innerText = `通話中: 相手を発見しました！`;
   });
 
   call.on('close', () => {
