@@ -1,12 +1,32 @@
 import './style.css'
 import { Peer } from 'peerjs'
 
+// 1. まずページ全体の余白を消すための設定を注入
+const globalStyle = document.createElement('style');
+globalStyle.textContent = `
+  * { box-sizing: border-box; }
+  body, html { 
+    margin: 0; 
+    padding: 0; 
+    width: 100%; 
+    height: 100%; 
+    overflow: hidden; 
+    background: #000;
+  }
+  #app { width: 100%; height: 100%; }
+  .tool-btn { background: #333; border: none; color: white; font-size: 18px; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; margin-bottom: 4px; }
+  .tool-btn:hover { background: #444; }
+  .ctrl-group { display: flex; flex-direction: column; align-items: center; font-size: 10px; color: #888; }
+  .off { background: #ea4335 !important; }
+`;
+document.head.appendChild(globalStyle);
+
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <div id="conference-root" style="display: flex; height: 100vh; width: 100vw; font-family: sans-serif; background: #000; color: white; overflow: hidden; flex-direction: column;">
+  <div id="conference-root" style="display: flex; height: 100vh; width: 100%; font-family: sans-serif; background: #000; color: white; overflow: hidden; flex-direction: column;">
     
-    <div id="main-display" style="height: 60vh; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
-      <video id="big-video" autoplay playsinline style="max-width: 100%; max-height: 100%; object-fit: contain;"></video>
-      <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.6); padding: 4px 12px; border-radius: 20px; border: 1px solid #4facfe; font-size: 11px;">待機中</div>
+    <div id="main-display" style="flex: 1; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center; overflow: hidden; width: 100%;">
+      <video id="big-video" autoplay playsinline style="width: 100%; height: 100%; object-fit: contain;"></video>
+      <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.6); padding: 4px 12px; border-radius: 20px; border: 1px solid #4facfe; font-size: 11px; z-index: 10;">待機中</div>
       
       <div id="chat-box" style="display:none; position: absolute; right: 10px; top: 10px; bottom: 10px; width: 220px; background: rgba(30,30,30,0.9); border-radius: 8px; flex-direction: column; border: 1px solid #444; z-index: 100;">
         <div style="padding: 8px; border-bottom: 1px solid #444; font-size: 12px; font-weight: bold;">チャット</div>
@@ -18,7 +38,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       </div>
     </div>
 
-    <div id="toolbar" style="height: 100px; background: #111; display: flex; align-items: center; justify-content: center; gap: 12px; border-top: 1px solid #333; flex-shrink: 0;">
+    <div id="toolbar" style="height: 100px; background: #111; display: flex; align-items: center; justify-content: center; gap: 12px; border-top: 1px solid #333; flex-shrink: 0; width: 100%;">
       <div class="ctrl-group"><button id="mic-btn" class="tool-btn">🎤</button><span>マイク</span></div>
       <div class="ctrl-group"><button id="cam-btn" class="tool-btn">📹</button><span>カメラ</span></div>
       <div class="ctrl-group"><button id="record-btn" class="tool-btn">🔴</button><span>録画</span></div>
@@ -31,25 +51,18 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <button id="exit-btn" style="background: #ea4335; color: white; border: none; padding: 10px 18px; border-radius: 5px; cursor: pointer;">退出</button>
     </div>
 
-    <div id="video-grid" style="flex: 1; background: #000; display: flex; gap: 10px; padding: 10px; overflow-x: auto; align-items: center;">
-      <div style="height: 100%; min-width: 180px; position: relative; border-radius: 8px; overflow: hidden; border: 2px solid #4facfe;">
+    <div id="video-grid" style="height: 140px; background: #000; display: flex; gap: 10px; padding: 10px; overflow-x: auto; align-items: center; justify-content: center; width: 100%;">
+      <div style="height: 100%; min-width: 180px; position: relative; border-radius: 8px; overflow: hidden; border: 2px solid #4facfe; flex-shrink: 0;">
         <video id="local-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: cover;"></video>
       </div>
     </div>
   </div>
 `
 
-const style = document.createElement('style');
-style.textContent = `
-  .tool-btn { background: #333; border: none; color: white; font-size: 18px; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; margin-bottom: 4px; }
-  .tool-btn:hover { background: #444; }
-  .ctrl-group { display: flex; flex-direction: column; align-items: center; font-size: 10px; color: #888; }
-  .off { background: #ea4335 !important; }
-  .active { background: #4facfe !important; }
-`;
-document.head.appendChild(style);
+// --------------------------------------------------
+// 以下、ロジック部分は前回の型エラー修正済みを継承
+// --------------------------------------------------
 
-// 型エラーを回避するために <HTMLElement> などの型指定を追加
 const bigVideo = document.querySelector<HTMLVideoElement>('#big-video')!;
 const localVideo = document.querySelector<HTMLVideoElement>('#local-video')!;
 const videoGrid = document.querySelector<HTMLElement>('#video-grid')!;
@@ -91,7 +104,7 @@ function join() {
   const room = roomInput ? roomInput.value.trim() : "";
   if (!room) return;
 
-  const roomKey = `v4-stable-${room}`;
+  const roomKey = `v5-center-${room}`;
   const mySeat = Math.floor(Math.random() * 20) + 1;
   peer = new Peer(`${roomKey}-${mySeat}`);
   
@@ -124,7 +137,7 @@ function handleCall(call: any) {
     const v = document.createElement('video');
     v.id = call.peer;
     v.srcObject = stream; v.autoplay = true; v.playsInline = true;
-    v.style.cssText = "height: 100%; min-width: 180px; border-radius: 8px; background: #222; cursor: pointer; object-fit: cover;";
+    v.style.cssText = "height: 100%; min-width: 180px; border-radius: 8px; background: #222; cursor: pointer; object-fit: cover; flex-shrink: 0;";
     v.onclick = () => { bigVideo.srcObject = stream; };
     videoGrid.appendChild(v);
     bigVideo.srcObject = stream;
