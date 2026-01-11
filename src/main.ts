@@ -2,18 +2,18 @@ import './style.css'
 import { Peer } from 'peerjs'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <div style="display: flex; height: 100vh; font-family: sans-serif; background: #000; color: white; overflow: hidden;">
-    <div style="width: 220px; background: #151515; padding: 15px; display: flex; flex-direction: column; gap: 10px; border-right: 1px solid #333;">
-      <h2 style="color: #00d4ff; font-size: 16px; margin: 0;">🌐 超軽量モード</h2>
-      <input id="room-id-input" type="text" placeholder="ルーム名" style="padding: 8px; border-radius: 5px; background: #222; border: 1px solid #444; color: white; font-size: 12px;">
-      <button id="join-room-btn" style="background: #00d4ff; color: black; border: none; padding: 10px; border-radius: 5px; cursor: pointer; font-weight: bold;">参加</button>
-      <div id="status-area" style="font-size: 11px; color: #00ff00; padding: 5px; background: rgba(0,255,0,0.1);">待機中</div>
+  <div style="display: flex; height: 100vh; font-family: sans-serif; background: #121212; color: white; overflow: hidden;">
+    <div style="width: 250px; background: #1e1e1e; padding: 20px; display: flex; flex-direction: column; gap: 15px; border-right: 1px solid #333;">
+      <h2 style="color: #4facfe; font-size: 18px; margin: 0;">🌐 安定接続モード</h2>
+      <input id="room-id-input" type="text" placeholder="ルーム名" style="padding: 10px; border-radius: 5px; background: #222; border: 1px solid #444; color: white;">
+      <button id="join-room-btn" style="background: #4facfe; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-weight: bold;">参加する</button>
+      <div id="status-area" style="font-size: 12px; color: #2ecc71; padding: 10px; background: rgba(46,204,113,0.1); border-radius: 5px;">待機中</div>
       <div style="margin-top: auto;">
-        <video id="local-video" autoplay playsinline muted style="width: 100%; border-radius: 5px; border: 1px solid #00d4ff;"></video>
+        <video id="local-video" autoplay playsinline muted style="width: 100%; border-radius: 8px; border: 2px solid #4facfe;"></video>
       </div>
-      <button id="hangup-btn" style="background: #ff4b2b; color: white; border: none; padding: 8px; border-radius: 5px; cursor: pointer; font-size: 12px;">リセット</button>
+      <button id="hangup-btn" style="background: #ff4b2b; color: white; border: none; padding: 8px; border-radius: 5px; cursor: pointer; margin-top: 10px;">退出</button>
     </div>
-    <div id="video-grid" style="flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); grid-auto-rows: 80px; gap: 5px; padding: 10px; overflow-y: auto;">
+    <div id="video-grid" style="flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); grid-auto-rows: 150px; gap: 15px; padding: 20px; overflow-y: auto;">
     </div>
   </div>
 `
@@ -26,13 +26,12 @@ const connectedPeers = new Set<string>();
 
 async function init() {
   try {
-    // 400人のために画質を限界まで落とす（これで軽くなる！）
     localStream = await navigator.mediaDevices.getUserMedia({ 
-      video: { width: 80, height: 60, frameRate: 5 }, 
+      video: { width: 320, height: 240 }, 
       audio: true 
     });
     (document.querySelector('#local-video') as HTMLVideoElement).srcObject = localStream;
-  } catch (e) { statusArea.innerText = "カメラエラー"; }
+  } catch (e) { statusArea.innerText = "カメラ許可が必要です"; }
 }
 
 function join() {
@@ -43,28 +42,26 @@ function join() {
   connectedPeers.clear();
   videoGrid.innerHTML = '';
 
-  const myNum = Math.floor(Math.random() * 400) + 1;
-  const roomKey = `lite-${room}`; // IDを短くして通信を安定させる
+  // 1〜20番の席をランダムに選ぶ（少人数で確実に繋ぐ設定）
+  const myNum = Math.floor(Math.random() * 20) + 1;
+  const roomKey = `stable-${room}`;
   
   peer = new Peer(`${roomKey}-${myNum}`);
 
-  peer.on('open', (id) => {
-    statusArea.innerHTML = `✅ 入室: No.${myNum}`;
+  peer.on('open', () => {
+    statusArea.innerHTML = `✅ 入室成功！<br>他の人を待っています...`;
     
-    // 【重要】少しずつ繋いでいくことで「重さ」と「失敗」を防ぐ
-    let currentIdx = 1;
-    const scanTimer = setInterval(() => {
-      if (!peer || peer.destroyed) return clearInterval(scanTimer);
-      
-      for (let i = 0; i < 10; i++) { // 1回につき10人分だけ探す
-        const target = `${roomKey}-${currentIdx}`;
-        if (currentIdx !== myNum && !connectedPeers.has(target)) {
+    // 3秒おきに20人分をスキャン
+    setInterval(() => {
+      if (!peer || peer.destroyed) return;
+      for (let i = 1; i <= 20; i++) {
+        const target = `${roomKey}-${i}`;
+        if (i !== myNum && !connectedPeers.has(target)) {
           const call = peer.call(target, localStream);
           if (call) handleCall(call);
         }
-        currentIdx = (currentIdx % 400) + 1;
       }
-    }, 3000); // 3秒おきに探す（回線のパンクを防ぐ）
+    }, 3000);
   });
 
   peer.on('call', (call) => {
@@ -83,7 +80,7 @@ function handleCall(call: any) {
     v.id = call.peer;
     v.srcObject = stream;
     v.autoplay = true; v.playsInline = true;
-    v.style.cssText = "width: 100%; height: 100%; object-fit: cover; background: #222; border-radius: 3px;";
+    v.style.cssText = "width: 100%; height: 100%; object-fit: cover; border-radius: 10px; background: #222;";
     videoGrid.appendChild(v);
     statusArea.innerText = `接続中: ${connectedPeers.size + 1}名`;
   });
