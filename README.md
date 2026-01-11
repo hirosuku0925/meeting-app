@@ -1,18 +1,26 @@
-"Gas mask and helmet" (https://skfb.ly/pzNVN) by Chenchanchong is licensed under Creative Commons Attribution (http://creativecommons.org/licenses/by/4.0/).
-"Gas Mask "Hamster"" (https://skfb.ly/6RKwU) by DenisKorablyov is licensed under Creative Commons Attribution (http://creativecommons.org/licenses/by/4.0/).
-# My 3D Head Tracking App
+# 🐱 Scratch猫アバター・ビデオ会議システム
 
-このプロジェクトは、Scratch の有名クリエイター **griffpatch** 氏による「3D Head Tracking」のアイデアとアセットをベースに制作されています。
+Scratchのキャラクターを自分の顔の代わりに動かせる、自作のビデオ会議アプリです。
+プログラムでパーツを合成して、アニメーションを実現しています。
 
-## Credits (クレジット)
+## ✨ 主な機能
+- **Scratch猫アバター**: キーボードの矢印キーで「黒目（Pupil）」がキョロキョロ動きます。
+- **自動口パク**: 音声なしでも、アバターが楽しそうにパクパク動きます。
+- **ビデオ会議**: ルーム名を入力して、友達や家族と接続できます。
+- **録画機能**: 画面の下にある🔴ボタンで、通話の内容を保存できます。
+- **チャット**: テキストでのやり取りも可能です。
 
-- **Original Project:** [3D Head Tracking Song!](https://scratch.mit.edu/projects/1230616495)
-- **Original Creator:** [griffpatch](https://scratch.mit.edu/users/griffpatch/)
-- **Assets:** Scratch Assets (MIT Media Lab) / 3d Head.sprite3
+## 🎮 使い方
+1. **カメラ・マイクの許可**: ブラウザの許可ボタンを押してください。
+2. **アバター起動**: 🐱ボタンを押すと、Scratch猫に変身します。
+3. **目を動かす**: キーボードの `←` `→` `↑` `↓` を押すと、猫の目が動きます。
+4. **ルーム参加**: 好きな言葉（例：`my-room`）を入れて「参加」を押します。
 
-### 感謝 (Acknowledgement)
-このアプリの 3D 的な回転アルゴリズムとビジュアル素材は、griffpatch 氏が Scratch 上で公開した素晴らしい作品からインスピレーションを得て、MediaPipe FaceMesh と Three.js を使って Web アプリとして再構築したものです。
-素晴らしい技術を共有してくださっている griffpatch 氏に深く感謝いたします。
+## 🛠 使用している技術
+- **Vite + TypeScript**: 高速な開発環境
+- **PeerJS**: サーバーなしで直接通信（P2P）を実現
+- **HTML5 Canvas**: パーツを重ねてアバターを描画
 
----
-*This project is inspired by the work of griffpatch on Scratch.*
+## ⚖️ ライセンス・素材について
+- **アバター素材**: Scratch（MIT Media Lab）のキャラクターを元に自作。
+- **著作権**: このプロジェクトは学習用として作成しています。
