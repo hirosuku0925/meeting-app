@@ -4,7 +4,7 @@ import { Peer } from 'peerjs'
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div style="display: flex; height: 100vh; font-family: sans-serif; background: #121212; color: white; overflow: hidden;">
     <div style="width: 250px; background: #1e1e1e; padding: 20px; display: flex; flex-direction: column; gap: 15px; border-right: 1px solid #333;">
-      <h2 style="color: #4facfe; font-size: 18px; margin: 0;">🌐 3人以上・絶対合流</h2>
+      <h2 style="color: #4facfe; font-size: 18px; margin: 0;">🌐 3人以上・合流強化</h2>
       <input id="room-id-input" type="text" placeholder="ルーム名" style="padding: 10px; border-radius: 5px; background: #222; border: 1px solid #444; color: white;">
       <button id="join-room-btn" style="background: #4facfe; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-weight: bold;">参加する</button>
       <div id="status-area" style="font-size: 12px; color: #2ecc71; padding: 10px; background: rgba(46,204,113,0.1); border-radius: 5px;">待機中</div>
@@ -28,36 +28,32 @@ async function init() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     (document.querySelector('#local-video') as HTMLVideoElement).srcObject = localStream;
-  } catch (e) { statusArea.innerText = "カメラ許可が必要です"; }
+  } catch (e) { statusArea.innerText = "カメラエラー"; }
 }
 
-// 席（ID）を探して参加する関数
 function tryJoin(room: string, seatNumber: number) {
-  if (seatNumber > 20) {
-    statusArea.innerText = "満員です";
-    return;
-  }
+  if (seatNumber > 20) return statusArea.innerText = "満員です";
 
-  const roomKey = `fixroom-${room}`;
+  const roomKey = `finalroom-${room}`;
   const myID = `${roomKey}-${seatNumber}`;
   
   if (peer) peer.destroy();
   peer = new Peer(myID);
 
   peer.on('open', () => {
-    statusArea.innerHTML = `✅ ${seatNumber}番席で入室成功！<br>他の人をスキャン中...`;
+    statusArea.innerHTML = `✅ ${seatNumber}番席で入室成功！<br>3人目を探しています...`;
     
-    // 3秒おきに1〜20番の全員に電話をかけまくる
+    // 3秒おきに「自分より小さい番号の人」にだけ電話をかける（衝突防止）
     setInterval(() => {
       if (!peer || peer.destroyed) return;
-      for (let i = 1; i <= 20; i++) {
+      for (let i = 1; i < seatNumber; i++) {
         const target = `${roomKey}-${i}`;
-        if (i !== seatNumber && !connectedPeers.has(target)) {
+        if (!connectedPeers.has(target)) {
           const call = peer.call(target, localStream);
           if (call) handleCall(call);
         }
       }
-    }, 4000);
+    }, 3000);
   });
 
   peer.on('call', (call) => {
@@ -66,11 +62,8 @@ function tryJoin(room: string, seatNumber: number) {
   });
 
   peer.on('error', (err) => {
-    // 席が被っていたら、次の番号を試す（これが重要！）
     if (err.type === 'unavailable-id') {
-      tryJoin(room, seatNumber + 1);
-    } else {
-      console.error(err.type);
+      tryJoin(room, seatNumber + 1); // 席が被ったら次へ
     }
   });
 }
@@ -98,7 +91,7 @@ function handleCall(call: any) {
 
 document.querySelector('#join-room-btn')?.addEventListener('click', () => {
   const room = (document.getElementById('room-id-input') as HTMLInputElement).value.trim();
-  if (room) tryJoin(room, 1); // 1番から順に空席を探す
+  if (room) tryJoin(room, 1);
 });
 
 document.querySelector('#hangup-btn')?.addEventListener('click', () => location.reload());
