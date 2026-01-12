@@ -23,4 +23,8 @@ Scratchのキャラクターを自分の顔の代わりに動かせる、自作�
 
 ## ⚖️ ライセンス・素材について
 - **アバター素材**: Scratch（MIT Media Lab）のキャラクターを元に自作。
-- **著作権**: このプロジェクトは学習用として作成しています。
+- **著作権**: このプロジェクトは学習用として作成しています
+// --- Credits ---
+// Original 3D Head Tracking Logic by griffpatch (https://scratch.mit.edu/users/griffpatch/)
+// Inspired by Scratch Project: https://scratch.mit.edu/projects/1230616495
+// ----------------。
