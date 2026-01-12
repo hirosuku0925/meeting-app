@@ -1,7 +1,7 @@
 import './style.css'
 import { Peer, MediaConnection } from 'peerjs'
 
-// --- 1. スタイル設定 ---
+// --- 1. スタイル設定（アイコン表示用の設定を追加） ---
 const globalStyle = document.createElement('style');
 globalStyle.textContent = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -11,6 +11,15 @@ globalStyle.textContent = `
   .ctrl-group { display: flex; flex-direction: column; align-items: center; font-size: 10px; color: #888; gap: 4px; }
   .off { background: #ea4335 !important; }
   .active { background: #4facfe !important; }
+
+  /* ビデオとアイコンを重ねるためのコンテナ */
+  .video-container { position: relative; height: 100%; min-width: 180px; background: #222; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+  .avatar-overlay { 
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+    display: none; align-items: center; justify-content: center; 
+    background: #222; z-index: 5;
+  }
+  .avatar-overlay img { width: 40%; aspect-ratio: 1/1; border-radius: 50%; object-fit: cover; border: 2px solid #4facfe; }
 `;
 document.head.appendChild(globalStyle);
 
@@ -20,7 +29,10 @@ if (app) {
   app.innerHTML = `
     <div style="display: flex; height: 100vh; width: 100%; flex-direction: column;">
       <div id="main-display" style="height: 60vh; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
-        <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain;"></video>
+        <div class="video-container" style="width:100%; border-radius:0;">
+          <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain;"></video>
+          <div id="big-avatar" class="avatar-overlay"><img id="big-avatar-img" src=""></div>
+        </div>
         <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 10;">準備中...</div>
         
         <div id="chat-box" style="display:none; position: absolute; right: 10px; top: 10px; bottom: 10px; width: 220px; background: rgba(30,30,30,0.9); border-radius: 8px; flex-direction: column; border: 1px solid #444; z-index: 100;">
@@ -36,31 +48,40 @@ if (app) {
       <div id="toolbar" style="height: 100px; background: #111; display: flex; align-items: center; justify-content: center; gap: 12px; border-top: 1px solid #333; flex-shrink: 0;">
         <div class="ctrl-group"><button id="mic-btn" class="tool-btn">🎤</button><span>マイク</span></div>
         <div class="ctrl-group"><button id="cam-btn" class="tool-btn">📹</button><span>カメラ</span></div>
+        <div class="ctrl-group"><button id="icon-btn" class="tool-btn">👤</button><span>アイコン</span></div>
         <div class="ctrl-group"><button id="share-btn" class="tool-btn">📺</button><span>画面共有</span></div>
         <div class="ctrl-group"><button id="bg-btn" class="tool-btn">🖼️</button><span>背景</span></div>
         <div class="ctrl-group"><button id="avatar-btn" class="tool-btn">🎭</button><span>アバター</span></div>
         <div class="ctrl-group"><button id="chat-toggle-btn" class="tool-btn">💬</button><span>チャット</span></div>
         <div class="ctrl-group"><button id="record-btn" class="tool-btn">🔴</button><span>録画</span></div>
+        
         <div style="width: 1px; height: 40px; background: #444; margin: 0 10px;"></div>
+        
         <input id="room-input" type="text" placeholder="ルーム名" style="background: #222; border: 1px solid #444; color: white; padding: 10px; border-radius: 5px; width: 100px;">
         <button id="join-btn" style="background: #2ecc71; color: white; border: none; padding: 10px 18px; border-radius: 5px; cursor: pointer; font-weight: bold;">参加</button>
         <button id="exit-btn" style="background: #ea4335; color: white; border: none; padding: 10px 18px; border-radius: 5px; cursor: pointer;">終了</button>
       </div>
 
+      <input type="file" id="icon-input" accept="image/*" style="display:none;">
+
       <div id="video-grid" style="flex: 1; background: #000; display: flex; gap: 10px; padding: 10px; overflow-x: auto; align-items: center; justify-content: center;">
-        <video id="local-video" autoplay playsinline muted style="height: 100%; border-radius: 8px; border: 2px solid #4facfe; object-fit: cover;"></video>
+        <div class="video-container" id="local-container" style="border: 2px solid #4facfe;">
+           <video id="local-video" autoplay playsinline muted style="height: 100%; object-fit: cover;"></video>
+           <div id="local-avatar" class="avatar-overlay"><img id="local-avatar-img" src=""></div>
+        </div>
       </div>
     </div>
   `;
 }
 
-// --- 3. プログラム処理（型安全版） ---
+// --- 3. プログラム処理 ---
 const bigVideo = document.querySelector<HTMLVideoElement>('#big-video')!;
 const localVideo = document.querySelector<HTMLVideoElement>('#local-video')!;
 const videoGrid = document.querySelector<HTMLElement>('#video-grid')!;
 const statusBadge = document.querySelector<HTMLElement>('#status-badge')!;
 const chatBox = document.querySelector<HTMLElement>('#chat-box')!;
 const chatMessages = document.querySelector<HTMLElement>('#chat-messages')!;
+const iconInput = document.querySelector<HTMLInputElement>('#icon-input')!;
 
 let localStream: MediaStream;
 let screenStream: MediaStream | null = null;
@@ -68,6 +89,7 @@ let peer: Peer | null = null;
 const connectedPeers = new Set<string>();
 let recorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
+let myIconUrl: string = "https://www.w3schools.com/howto/img_avatar.png"; // 初期アイコン
 
 async function init() {
   try {
@@ -83,6 +105,32 @@ async function init() {
   }
 }
 
+// アイコン設定
+document.querySelector('#icon-btn')?.addEventListener('click', () => iconInput.click());
+iconInput.addEventListener('change', (e) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (file) {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      myIconUrl = ev.target?.result as string;
+      (document.getElementById('local-avatar-img') as HTMLImageElement).src = myIconUrl;
+      (document.getElementById('big-avatar-img') as HTMLImageElement).src = myIconUrl;
+    };
+    reader.readAsDataURL(file);
+  }
+});
+
+// カメラオフ時の表示切り替え
+function toggleAvatar(isCameraOn: boolean) {
+  const localOverlay = document.getElementById('local-avatar')!;
+  const bigOverlay = document.getElementById('big-avatar')!;
+  localOverlay.style.display = isCameraOn ? 'none' : 'flex';
+  // メイン画面が自分のストリームを表示している時だけ切り替え
+  if (bigVideo.srcObject === localStream || bigVideo.srcObject === screenStream) {
+    bigOverlay.style.display = isCameraOn ? 'none' : 'flex';
+  }
+}
+
 // マイク操作
 document.querySelector('#mic-btn')?.addEventListener('click', (e) => {
   const track = localStream.getAudioTracks()[0];
@@ -95,6 +143,7 @@ document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
   const track = localStream.getVideoTracks()[0];
   track.enabled = !track.enabled;
   (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
+  toggleAvatar(track.enabled);
 });
 
 // 画面共有
@@ -105,6 +154,7 @@ document.querySelector('#share-btn')?.addEventListener('click', async (e) => {
       screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
       btn.classList.add('active');
       bigVideo.srcObject = screenStream;
+      document.getElementById('big-avatar')!.style.display = 'none'; // 共有中はアイコン隠す
       replaceVideoTrack(screenStream.getVideoTracks()[0]);
       screenStream.getVideoTracks()[0].onended = () => stopScreenShare(btn);
     } catch (err) { console.error(err); }
@@ -120,6 +170,7 @@ function stopScreenShare(btn: HTMLElement) {
   }
   btn.classList.remove('active');
   bigVideo.srcObject = localStream;
+  toggleAvatar(localStream.getVideoTracks()[0].enabled);
   replaceVideoTrack(localStream.getVideoTracks()[0]);
 }
 
@@ -135,12 +186,11 @@ function replaceVideoTrack(newTrack: MediaStreamTrack) {
   });
 }
 
-// チャット開閉
+// チャット
 document.querySelector('#chat-toggle-btn')?.addEventListener('click', () => {
   chatBox.style.display = chatBox.style.display === 'none' ? 'flex' : 'none';
 });
 
-// チャット送信
 document.querySelector('#chat-send-btn')?.addEventListener('click', () => {
   const input = document.querySelector<HTMLInputElement>('#chat-input')!;
   if (!input.value) return;
@@ -173,7 +223,7 @@ document.querySelector('#record-btn')?.addEventListener('click', (e) => {
   }
 });
 
-// 接続処理
+// 接続
 function join() {
   const input = document.querySelector<HTMLInputElement>('#room-input')!;
   const room = input.value.trim();
@@ -219,14 +269,41 @@ function handleCall(call: MediaConnection) {
 
   call.on('stream', (stream: MediaStream) => {
     if (document.getElementById(call.peer)) return;
+    
+    // 相手のビデオもコンテナ化してアイコン対応の準備
+    const container = document.createElement('div');
+    container.className = 'video-container';
+    container.id = `container-${call.peer}`;
+
     const v = document.createElement('video');
     v.id = call.peer;
     v.srcObject = stream; v.autoplay = true; v.playsInline = true;
-    v.style.cssText = "height: 100%; min-width: 180px; border-radius: 8px; background: #222; object-fit: cover; cursor: pointer;";
-    v.onclick = () => { bigVideo.srcObject = stream; bigVideo.muted = false; };
-    videoGrid.appendChild(v);
+    v.style.cssText = "height: 100%; object-fit: cover; cursor: pointer;";
+    
+    // 相手用のダミーアイコン（相手が送ってこない限りはデフォルト）
+    const overlay = document.createElement('div');
+    overlay.className = 'avatar-overlay';
+    overlay.id = `avatar-${call.peer}`;
+    overlay.innerHTML = `<img src="https://www.w3schools.com/howto/img_avatar.png">`;
+
+    v.onclick = () => { 
+      bigVideo.srcObject = stream; 
+      bigVideo.muted = false; 
+      // 相手のカメラ状態を判定してアイコン出すか決める
+      const isVideoOn = stream.getVideoTracks()[0].enabled;
+      document.getElementById('big-avatar')!.style.display = isVideoOn ? 'none' : 'flex';
+    };
+
+    container.appendChild(v);
+    container.appendChild(overlay);
+    videoGrid.appendChild(container);
+    
     bigVideo.srcObject = stream;
     bigVideo.muted = false;
+
+    // ストリームのトラック監視（相手がカメラ切った時用）
+    stream.getVideoTracks()[0].onmute = () => { overlay.style.display = 'flex'; };
+    stream.getVideoTracks()[0].onunmute = () => { overlay.style.display = 'none'; };
   });
 }
 
