@@ -35,20 +35,19 @@ if (app) {
         </div>
       </div>
 
-      <div id="toolbar" style="height: 100px; background: #111; display: flex; align-items: center; justify-content: center; gap: 12px; border-top: 1px solid #333; flex-shrink: 0;">
+      <div id="toolbar" style="height: 100px; background: #111; display: flex; align-items: center; justify-content: center; gap: 12px; border-top: 1px solid #333; flex-shrink: 0; padding: 0 10px;">
         <div class="ctrl-group"><button id="mic-btn" class="tool-btn">🎤</button><span>マイク</span></div>
         <div class="ctrl-group"><button id="cam-btn" class="tool-btn">📹</button><span>カメラ</span></div>
         <div class="ctrl-group"><button id="share-btn" class="tool-btn">📺</button><span>画面共有</span></div>
-        <div class="ctrl-group"><button id="bg-btn" class="tool-btn">🖼️</button><span>背景</span></div>
-        <div class="ctrl-group"><button id="avatar-btn" class="tool-btn">🎭</button><span>アバター</span></div>
         <div class="ctrl-group"><button id="chat-toggle-btn" class="tool-btn">💬</button><span>チャット</span></div>
         <div class="ctrl-group"><button id="record-btn" class="tool-btn">🔴</button><span>録画</span></div>
         
-        <div style="width: 1px; height: 40px; background: #444; margin: 0 10px;"></div>
+        <div style="width: 1px; height: 40px; background: #444; margin: 0 5px;"></div>
         
-        <input id="room-input" type="text" placeholder="ルーム名" style="background: #222; border: 1px solid #444; color: white; padding: 10px; border-radius: 5px; width: 100px;">
-        <button id="join-btn" style="background: #2ecc71; color: white; border: none; padding: 10px 18px; border-radius: 5px; cursor: pointer; font-weight: bold;">参加</button>
-        <button id="exit-btn" style="background: #ea4335; color: white; border: none; padding: 10px 18px; border-radius: 5px; cursor: pointer;">終了</button>
+        <input id="name-input" type="text" placeholder="あなたの名前" value="ゲスト" style="background: #222; border: 1px solid #444; color: white; padding: 10px; border-radius: 5px; width: 90px; font-size: 12px;">
+        <input id="room-input" type="text" placeholder="ルーム名" style="background: #222; border: 1px solid #444; color: white; padding: 10px; border-radius: 5px; width: 90px; font-size: 12px;">
+        <button id="join-btn" style="background: #2ecc71; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 12px;">参加</button>
+        <button id="exit-btn" style="background: #ea4335; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 12px;">終了</button>
       </div>
 
       <div id="video-grid" style="flex: 1; background: #000; display: flex; gap: 10px; padding: 10px; overflow-x: auto; align-items: center; justify-content: center;">
@@ -69,6 +68,7 @@ const chatMessages = document.querySelector<HTMLDivElement>('#chat-messages')!;
 let localStream: MediaStream;
 let screenStream: MediaStream | null = null;
 let peer: Peer | null = null;
+let myName = "ゲスト"; // ★自分の名前を保持する変数
 const connectedPeers = new Set<string>();
 const dataConnections = new Map<string, DataConnection>();
 let recorder: MediaRecorder | null = null;
@@ -82,7 +82,7 @@ async function init() {
     });
     localVideo.srcObject = localStream;
     bigVideo.srcObject = localStream;
-    statusBadge.innerText = "準備完了！ルーム名を入力して参加してください";
+    statusBadge.innerText = "準備完了！名前とルーム名を入力して参加してください";
   } catch (e) {
     statusBadge.innerText = "カメラエラー！許可してください";
   }
@@ -101,18 +101,17 @@ function sendChatMessage() {
   const msg = input.value.trim();
   if (!msg) return;
 
+  // 送信データに自分の名前を含める
+  const data = { name: myName, message: msg };
   dataConnections.forEach(conn => {
-    if (conn.open) conn.send(msg);
+    if (conn.open) conn.send(data);
   });
 
   appendMessage("自分", msg, true);
   input.value = "";
 }
 
-// ボタン等のイベント設定
 document.querySelector('#chat-send-btn')?.addEventListener('click', sendChatMessage);
-
-// ★エラー箇所: input要素を明示的にキャスト
 document.querySelector<HTMLInputElement>('#chat-input')?.addEventListener('keypress', (e: KeyboardEvent) => {
   if (e.key === 'Enter') sendChatMessage();
 });
@@ -196,10 +195,15 @@ document.querySelector('#record-btn')?.addEventListener('click', (e: Event) => {
 });
 
 function join() {
+  const nameInput = document.querySelector<HTMLInputElement>('#name-input');
   const roomInput = document.querySelector<HTMLInputElement>('#room-input');
+  
+  myName = nameInput?.value.trim() || "名無し"; // ★名前を取得
   const room = roomInput?.value.trim();
+  
   if (!room) return alert("ルーム名を入力してください");
-  statusBadge.innerText = "サーバー接続中...";
+  
+  statusBadge.innerText = `${myName}として接続中...`;
   tryNextSeat(`vFINAL-${room}`, 1);
 }
 
@@ -207,8 +211,8 @@ function tryNextSeat(roomKey: string, seat: number) {
   if (peer) peer.destroy();
   peer = new Peer(`${roomKey}-${seat}`);
 
-  peer.on('open', () => {
-    statusBadge.innerText = `${seat}番席で入室。接続待機中...`;
+  peer.on('open', (id) => {
+    statusBadge.innerText = `入室完了: ${myName}`;
     
     setInterval(() => {
       if (!peer || peer.destroyed) return;
@@ -262,8 +266,12 @@ function handleDataConnection(conn: DataConnection) {
   dataConnections.set(conn.peer, conn);
   
   conn.on('data', (data: any) => {
-    const senderName = conn.peer.split('-').pop();
-    appendMessage(`ユーザー${senderName}`, data as string);
+    // データがオブジェクト（名前とメッセージ）の場合に対応
+    if (typeof data === 'object' && data.name) {
+      appendMessage(data.name, data.message);
+    } else {
+      appendMessage("不明なユーザー", data as string);
+    }
   });
 
   conn.on('close', () => {
