@@ -211,7 +211,7 @@ function tryNextSeat(roomKey: string, seat: number) {
   if (peer) peer.destroy();
   peer = new Peer(`${roomKey}-${seat}`);
 
-  peer.on('open', (id) => {
+  peer.on('open', () => {
     statusBadge.innerText = `入室完了: ${myName}`;
     
     setInterval(() => {
