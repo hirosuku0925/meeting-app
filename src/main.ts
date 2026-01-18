@@ -180,7 +180,7 @@ document.querySelector('#avatar-btn')?.addEventListener('click', async (e: Event
       loader.register((ext: any) => new VRMLoaderPlugin(ext));
       
       try {
-        const model = await loader.loadAsync('/vroid-avatar.vrm');
+        const model = await loader.loadAsync('/meeting-app/vroid-avatar.vrm');
         scene.add(model.scene);
         
         const animate = () => {
@@ -189,7 +189,7 @@ document.querySelector('#avatar-btn')?.addEventListener('click', async (e: Event
         };
         animate();
       } catch (vrmError) {
-        container.innerHTML = '<p style="color: #ff6b6b; text-align: center; padding-top: 50px;">VRM ファイルが見つかりません。<br>public/vroid-avatar.vrm に配置してください。</p>';
+        container.innerHTML = '<p style="color: #ff6b6b; text-align: center; padding-top: 50px;">VRM ファイルが見つかりません。<br>ファイルが正しくアップロードされているか確認してください。</p>';
       }
     } catch (error) {
       console.error('アバター読み込みエラー:', error);

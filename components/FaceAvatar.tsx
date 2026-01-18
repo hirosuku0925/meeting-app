@@ -61,7 +61,7 @@ export default function FaceAvatar() {
       loader.register((ext: any) => new VRMLoaderPlugin(ext));
       
       // ここにVRoidで作成したVRMファイルのURLを指定
-      const model = await loader.loadAsync('/vroid-avatar.vrm');
+      const model = await loader.loadAsync('/meeting-app/vroid-avatar.vrm');
       vrmRef.current = model.userData.vrm;
       frmSyncRef.current = new VRMFaceSync(vrmRef.current);
       frmSyncRef.current.setSmoothingFactor(0.7); // スムージング設定
