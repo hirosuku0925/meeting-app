@@ -133,12 +133,12 @@ document.querySelector('#avatar-btn')?.addEventListener('click', async (e: Event
     modal.id = 'avatar-modal';
     modal.style.cssText = `
       position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
-      background: rgba(0,0,0,0.8); display: flex; align-items: center; 
+      background: rgba(0,0,0,0.9); display: flex; align-items: center; 
       justify-content: center; z-index: 200;
     `;
     modal.innerHTML = `
       <div style="background: #1a1a1a; border: 2px solid #4facfe; border-radius: 10px; 
-                  padding: 20px; width: 90%; height: 90%; display: flex; flex-direction: column;">
+                  padding: 20px; width: 95%; height: 95%; display: flex; flex-direction: column;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
           <h2 style="color: #4facfe;">VRoid アバター</h2>
           <button id="close-avatar-btn" style="background: #ea4335; color: white; border: none; 
@@ -151,9 +151,51 @@ document.querySelector('#avatar-btn')?.addEventListener('click', async (e: Event
     `;
     document.body.appendChild(modal);
     
-    // FaceAvatarコンポーネントのような機能をここに挿入可能
-    const container = document.querySelector('#avatar-container')!;
-    container.innerHTML = '<p style="color: #4facfe; text-align: center; padding-top: 50px;">アバター読み込み中...</p>';
+    // VRM アバターをロード
+    try {
+      const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
+      const { VRMLoaderPlugin } = await import('@pixiv/three-vrm');
+      const THREE = await import('three');
+      
+      const container = document.querySelector('#avatar-container')!;
+      container.innerHTML = '';
+      
+      // Three.js シーンセットアップ
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      
+      renderer.setSize(container.clientWidth, container.clientHeight);
+      renderer.setClearColor(0x000000, 1);
+      container.appendChild(renderer.domElement);
+      
+      camera.position.set(0, 1, 2);
+      scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      directionalLight.position.set(5, 5, 5);
+      scene.add(directionalLight);
+      
+      // VRM ロード
+      const loader = new GLTFLoader();
+      loader.register((ext: any) => new VRMLoaderPlugin(ext));
+      
+      try {
+        const model = await loader.loadAsync('/vroid-avatar.vrm');
+        scene.add(model.scene);
+        
+        const animate = () => {
+          requestAnimationFrame(animate);
+          renderer.render(scene, camera);
+        };
+        animate();
+      } catch (vrmError) {
+        container.innerHTML = '<p style="color: #ff6b6b; text-align: center; padding-top: 50px;">VRM ファイルが見つかりません。<br>public/vroid-avatar.vrm に配置してください。</p>';
+      }
+    } catch (error) {
+      console.error('アバター読み込みエラー:', error);
+      const container = document.querySelector('#avatar-container')!;
+      container.innerHTML = '<p style="color: #ff6b6b; text-align: center; padding-top: 50px;">アバターの読み込みに失敗しました。</p>';
+    }
     
     // 閉じるボタン
     document.querySelector('#close-avatar-btn')?.addEventListener('click', () => {
@@ -163,8 +205,8 @@ document.querySelector('#avatar-btn')?.addEventListener('click', async (e: Event
     });
     
     // モーダル外クリックで閉じる
-    modal.addEventListener('click', (e: Event) => {
-      if (e.target === modal) {
+    modal.addEventListener('click', (event: Event) => {
+      if (event.target === modal) {
         modal.remove();
         avatarVisible = false;
         btn.classList.remove('active');
