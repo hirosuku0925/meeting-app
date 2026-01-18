@@ -41,6 +41,7 @@ if (app) {
         <div class="ctrl-group"><button id="share-btn" class="tool-btn">📺</button><span>画面共有</span></div>
         <div class="ctrl-group"><button id="chat-toggle-btn" class="tool-btn">💬</button><span>チャット</span></div>
         <div class="ctrl-group"><button id="record-btn" class="tool-btn">🔴</button><span>録画</span></div>
+        <div class="ctrl-group"><button id="avatar-btn" class="tool-btn">🎭</button><span>アバター</span></div>
         
         <div style="width: 1px; height: 40px; background: #444; margin: 0 5px;"></div>
         
@@ -73,6 +74,7 @@ const connectedPeers = new Set<string>();
 const dataConnections = new Map<string, DataConnection>();
 let recorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
+let avatarVisible = false; // アバター表示状態
 
 async function init() {
   try {
@@ -118,6 +120,57 @@ document.querySelector<HTMLInputElement>('#chat-input')?.addEventListener('keypr
 
 document.querySelector('#chat-toggle-btn')?.addEventListener('click', () => {
   chatBox.style.display = chatBox.style.display === 'none' ? 'flex' : 'none';
+});
+
+document.querySelector('#avatar-btn')?.addEventListener('click', async (e: Event) => {
+  const btn = e.currentTarget as HTMLElement;
+  avatarVisible = !avatarVisible;
+  btn.classList.toggle('active', avatarVisible);
+  
+  if (avatarVisible) {
+    // アバターモーダルを表示
+    const modal = document.createElement('div');
+    modal.id = 'avatar-modal';
+    modal.style.cssText = `
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+      background: rgba(0,0,0,0.8); display: flex; align-items: center; 
+      justify-content: center; z-index: 200;
+    `;
+    modal.innerHTML = `
+      <div style="background: #1a1a1a; border: 2px solid #4facfe; border-radius: 10px; 
+                  padding: 20px; width: 90%; height: 90%; display: flex; flex-direction: column;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+          <h2 style="color: #4facfe;">VRoid アバター</h2>
+          <button id="close-avatar-btn" style="background: #ea4335; color: white; border: none; 
+                  padding: 8px 15px; border-radius: 5px; cursor: pointer; font-size: 14px;">
+            閉じる
+          </button>
+        </div>
+        <div id="avatar-container" style="flex: 1; background: #000; border-radius: 8px; overflow: hidden;"></div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    
+    // FaceAvatarコンポーネントのような機能をここに挿入可能
+    const container = document.querySelector('#avatar-container')!;
+    container.innerHTML = '<p style="color: #4facfe; text-align: center; padding-top: 50px;">アバター読み込み中...</p>';
+    
+    // 閉じるボタン
+    document.querySelector('#close-avatar-btn')?.addEventListener('click', () => {
+      modal.remove();
+      avatarVisible = false;
+      btn.classList.remove('active');
+    });
+    
+    // モーダル外クリックで閉じる
+    modal.addEventListener('click', (e: Event) => {
+      if (e.target === modal) {
+        modal.remove();
+        avatarVisible = false;
+        btn.classList.remove('active');
+      }
+    });
+  }
 });
 
 document.querySelector('#mic-btn')?.addEventListener('click', (e: Event) => {
