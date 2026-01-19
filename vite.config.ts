@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 
 export default defineConfig({
-  base: '/meeting-app/', 
+  base: '/meeting-app/',
+  publicDir: 'public'
 })

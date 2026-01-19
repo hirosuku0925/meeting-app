@@ -3,6 +3,9 @@
  * 複数のアバターを管理し、切り替え機能を提供
  */
 
+// Vite の import.meta.env.BASE_URL を使用してベースパスを取得
+const BASE_PATH = import.meta.env.BASE_URL || '/meeting-app/';
+
 export interface Avatar {
   id: string;
   name: string;
@@ -17,56 +20,56 @@ export const AVATARS: Avatar[] = [
     name: 'キツネ',
     emoji: '🦊',
     description: 'かわいいキツネアバター',
-    modelPath: '/meeting-app/avatars/fox.vrm'
+    modelPath: BASE_PATH + 'avatars/fox.vrm'
   },
   {
     id: 'cat',
     name: 'ネコ',
     emoji: '🐱',
     description: 'かわいいネコアバター',
-    modelPath: '/meeting-app/avatars/cat.vrm'
+    modelPath: BASE_PATH + 'avatars/cat.vrm'
   },
   {
     id: 'dog',
     name: 'イヌ',
     emoji: '🐶',
     description: 'かわいいイヌアバター',
-    modelPath: '/meeting-app/avatars/dog.vrm'
+    modelPath: BASE_PATH + 'avatars/dog.vrm'
   },
   {
     id: 'rabbit',
     name: 'ウサギ',
     emoji: '🐰',
     description: 'かわいいウサギアバター',
-    modelPath: '/meeting-app/avatars/rabbit.vrm'
+    modelPath: BASE_PATH + 'avatars/rabbit.vrm'
   },
   {
     id: 'bear',
     name: 'クマ',
     emoji: '🐻',
     description: 'かわいいクマアバター',
-    modelPath: '/meeting-app/avatars/bear.vrm'
+    modelPath: BASE_PATH + 'avatars/bear.vrm'
   },
   {
     id: 'robot',
     name: 'ロボット',
     emoji: '🤖',
     description: 'クールなロボットアバター',
-    modelPath: '/meeting-app/avatars/robot.vrm'
+    modelPath: BASE_PATH + 'avatars/robot.vrm'
   },
   {
     id: 'alien',
     name: 'エイリアン',
     emoji: '👽',
     description: 'ユニークなエイリアンアバター',
-    modelPath: '/meeting-app/avatars/alien.vrm'
+    modelPath: BASE_PATH + 'avatars/alien.vrm'
   },
   {
     id: 'default',
     name: 'デフォルト',
     emoji: '👤',
     description: 'デフォルトアバター',
-    modelPath: '/meeting-app/vroid-avatar.vrm'
+    modelPath: BASE_PATH + 'vroid-avatar.vrm'
   }
 ];
 
