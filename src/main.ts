@@ -1,5 +1,8 @@
 import './style.css'
 import { Peer, MediaConnection, DataConnection } from 'peerjs'
+import avatarManager from './avatar-manager'
+import { createAvatarDialog, setupAvatarCardClickHandler } from './avatar-dialog'
+import SettingsManager from './settings-manager'
 
 // --- 1. スタイル設定 ---
 const globalStyle = document.createElement('style');
@@ -74,7 +77,6 @@ const connectedPeers = new Set<string>();
 const dataConnections = new Map<string, DataConnection>();
 let recorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
-let avatarVisible = false; // アバター表示状態
 
 async function init() {
   try {
@@ -85,6 +87,21 @@ async function init() {
     localVideo.srcObject = localStream;
     bigVideo.srcObject = localStream;
     statusBadge.innerText = "準備完了！名前とルーム名を入力して参加してください";
+
+    // 前回の設定を復元
+    const savedUserName = SettingsManager.getUserName();
+    const savedRoomName = SettingsManager.getLastRoomName();
+    const savedAvatarId = SettingsManager.getSelectedAvatarId();
+
+    const nameInput = document.querySelector<HTMLInputElement>('#name-input');
+    const roomInput = document.querySelector<HTMLInputElement>('#room-input');
+
+    if (nameInput) nameInput.value = savedUserName;
+    if (roomInput) roomInput.value = savedRoomName;
+
+    // アバターマネージャーを初期化
+    avatarManager.setAvatar(savedAvatarId);
+
   } catch (e) {
     statusBadge.innerText = "カメラエラー！許可してください";
   }
@@ -124,11 +141,20 @@ document.querySelector('#chat-toggle-btn')?.addEventListener('click', () => {
 
 document.querySelector('#avatar-btn')?.addEventListener('click', async (e: Event) => {
   const btn = e.currentTarget as HTMLElement;
-  avatarVisible = !avatarVisible;
-  btn.classList.toggle('active', avatarVisible);
   
-  if (avatarVisible) {
-    // アバターモーダルを表示
+  // アバター選択ダイアログを表示
+  const dialog = createAvatarDialog();
+  
+  // アバター選択時のコールバック
+  setupAvatarCardClickHandler(dialog, async (avatarId: string) => {
+    btn.classList.add('active');
+    
+    // 選択されたアバターに切り替えて保存
+    avatarManager.setAvatar(avatarId);
+    SettingsManager.setSelectedAvatarId(avatarId);
+    const selectedAvatar = avatarManager.getCurrentAvatar();
+    
+    // アバター表示モーダルを表示
     const modal = document.createElement('div');
     modal.id = 'avatar-modal';
     modal.style.cssText = `
@@ -140,13 +166,19 @@ document.querySelector('#avatar-btn')?.addEventListener('click', async (e: Event
       <div style="background: #1a1a1a; border: 2px solid #4facfe; border-radius: 10px; 
                   padding: 20px; width: 95%; height: 95%; display: flex; flex-direction: column;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-          <h2 style="color: #4facfe;">VRoid アバター</h2>
+          <h2 style="color: #4facfe;">${selectedAvatar.emoji} ${selectedAvatar.name} - ${selectedAvatar.description}</h2>
           <button id="close-avatar-btn" style="background: #ea4335; color: white; border: none; 
                   padding: 8px 15px; border-radius: 5px; cursor: pointer; font-size: 14px;">
             閉じる
           </button>
         </div>
-        <div id="avatar-container" style="flex: 1; background: #000; border-radius: 8px; overflow: hidden;"></div>
+        <div id="avatar-container" style="flex: 1; background: #000; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;">
+          <div style="color: #4facfe; text-align: center; font-size: 18px;">
+            <p>${selectedAvatar.emoji}</p>
+            <p>${selectedAvatar.name}アバター</p>
+            <p style="font-size: 12px; color: #888; margin-top: 10px;">モデルの読み込み中...</p>
+          </div>
+        </div>
       </div>
     `;
     document.body.appendChild(modal);
@@ -180,27 +212,34 @@ document.querySelector('#avatar-btn')?.addEventListener('click', async (e: Event
       loader.register((ext: any) => new VRMLoaderPlugin(ext));
       
       try {
-        const model = await loader.loadAsync('/meeting-app/vroid-avatar.vrm');
+        const model = await loader.loadAsync(selectedAvatar.modelPath);
         scene.add(model.scene);
         
         const animate = () => {
           requestAnimationFrame(animate);
+          model.scene.rotation.y += 0.005; // アバターを回転させて表示
           renderer.render(scene, camera);
         };
         animate();
       } catch (vrmError) {
-        container.innerHTML = '<p style="color: #ff6b6b; text-align: center; padding-top: 50px;">VRM ファイルが見つかりません。<br>ファイルが正しくアップロードされているか確認してください。</p>';
+        container.innerHTML = `<p style="color: #ff6b6b; text-align: center; padding-top: 50px;">
+          ${selectedAvatar.emoji}<br>
+          ${selectedAvatar.name}のモデルが見つかりません。<br>
+          <small style="color: #888;">パス: ${selectedAvatar.modelPath}</small>
+        </p>`;
       }
     } catch (error) {
       console.error('アバター読み込みエラー:', error);
       const container = document.querySelector('#avatar-container')!;
-      container.innerHTML = '<p style="color: #ff6b6b; text-align: center; padding-top: 50px;">アバターの読み込みに失敗しました。</p>';
+      container.innerHTML = `<p style="color: #ff6b6b; text-align: center; padding-top: 50px;">
+        アバターの読み込みに失敗しました。<br>
+        <small>${error}</small>
+      </p>`;
     }
     
     // 閉じるボタン
     document.querySelector('#close-avatar-btn')?.addEventListener('click', () => {
       modal.remove();
-      avatarVisible = false;
       btn.classList.remove('active');
     });
     
@@ -208,11 +247,10 @@ document.querySelector('#avatar-btn')?.addEventListener('click', async (e: Event
     modal.addEventListener('click', (event: Event) => {
       if (event.target === modal) {
         modal.remove();
-        avatarVisible = false;
         btn.classList.remove('active');
       }
     });
-  }
+  });
 });
 
 document.querySelector('#mic-btn')?.addEventListener('click', (e: Event) => {
@@ -297,6 +335,11 @@ function join() {
   const room = roomInput?.value.trim();
   
   if (!room) return alert("ルーム名を入力してください");
+  
+  // 設定を保存
+  SettingsManager.setUserName(myName);
+  SettingsManager.setLastRoomName(room);
+  SettingsManager.setSelectedAvatarId(avatarManager.getCurrentAvatarId());
   
   statusBadge.innerText = `${myName}として接続中...`;
   tryNextSeat(`vFINAL-${room}`, 1);
