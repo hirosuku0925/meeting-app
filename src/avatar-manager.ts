@@ -17,56 +17,56 @@ export const AVATARS: Avatar[] = [
     name: 'キツネ',
     emoji: '🦊',
     description: 'かわいいキツネアバター',
-    modelPath: '/avatars/fox.vrm'
+    modelPath: '/meeting-app/avatars/fox.vrm'
   },
   {
     id: 'cat',
     name: 'ネコ',
     emoji: '🐱',
     description: 'かわいいネコアバター',
-    modelPath: '/avatars/cat.vrm'
+    modelPath: '/meeting-app/avatars/cat.vrm'
   },
   {
     id: 'dog',
     name: 'イヌ',
     emoji: '🐶',
     description: 'かわいいイヌアバター',
-    modelPath: '/avatars/dog.vrm'
+    modelPath: '/meeting-app/avatars/dog.vrm'
   },
   {
     id: 'rabbit',
     name: 'ウサギ',
     emoji: '🐰',
     description: 'かわいいウサギアバター',
-    modelPath: '/avatars/rabbit.vrm'
+    modelPath: '/meeting-app/avatars/rabbit.vrm'
   },
   {
     id: 'bear',
     name: 'クマ',
     emoji: '🐻',
     description: 'かわいいクマアバター',
-    modelPath: '/avatars/bear.vrm'
+    modelPath: '/meeting-app/avatars/bear.vrm'
   },
   {
     id: 'robot',
     name: 'ロボット',
     emoji: '🤖',
     description: 'クールなロボットアバター',
-    modelPath: '/avatars/robot.vrm'
+    modelPath: '/meeting-app/avatars/robot.vrm'
   },
   {
     id: 'alien',
     name: 'エイリアン',
     emoji: '👽',
     description: 'ユニークなエイリアンアバター',
-    modelPath: '/avatars/alien.vrm'
+    modelPath: '/meeting-app/avatars/alien.vrm'
   },
   {
     id: 'default',
     name: 'デフォルト',
     emoji: '👤',
     description: 'デフォルトアバター',
-    modelPath: '/vroid-avatar.vrm'
+    modelPath: '/meeting-app/vroid-avatar.vrm'
   }
 ];
 
