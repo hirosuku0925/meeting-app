@@ -1,9 +1,8 @@
 import './style.css'
 import { Peer, MediaConnection, DataConnection } from 'peerjs'
-import avatarManager from './avatar-manager'
-import { createAvatarDialog, setupAvatarCardClickHandler } from './avatar-dialog'
 import voiceChangerManager from './voice-changer-manager'
 import { setupVoiceChangerButtonHandler } from './voice-changer-dialog'
+import { setupFaceAvatarButtonHandler } from './face-image-avatar-dialog'
 import SettingsManager from './settings-manager'
 
 // --- 1. スタイル設定 ---
@@ -110,16 +109,12 @@ async function init() {
     // 前回の設定を復元
     const savedUserName = SettingsManager.getUserName();
     const savedRoomName = SettingsManager.getLastRoomName();
-    const savedAvatarId = SettingsManager.getSelectedAvatarId();
 
     const nameInput = document.querySelector<HTMLInputElement>('#name-input');
     const roomInput = document.querySelector<HTMLInputElement>('#room-input');
 
     if (nameInput) nameInput.value = savedUserName;
     if (roomInput) roomInput.value = savedRoomName;
-
-    // アバターマネージャーを初期化
-    avatarManager.setAvatar(savedAvatarId);
 
   } catch (e) {
     statusBadge.innerText = "カメラエラー！許可してください";
@@ -158,124 +153,8 @@ document.querySelector('#chat-toggle-btn')?.addEventListener('click', () => {
   chatBox.style.display = chatBox.style.display === 'none' ? 'flex' : 'none';
 });
 
-document.querySelector('#avatar-btn')?.addEventListener('click', async (e: Event) => {
-  const btn = e.currentTarget as HTMLElement;
-  
-  // アバター選択ダイアログを表示
-  const dialog = createAvatarDialog();
-  
-  // アバター選択時のコールバック
-  setupAvatarCardClickHandler(dialog, async (avatarId: string) => {
-    btn.classList.add('active');
-    
-    // 選択されたアバターに切り替えて保存
-    avatarManager.setAvatar(avatarId);
-    SettingsManager.setSelectedAvatarId(avatarId);
-    const selectedAvatar = avatarManager.getCurrentAvatar();
-    
-    // アバター表示モーダルを表示
-    const modal = document.createElement('div');
-    modal.id = 'avatar-modal';
-    modal.style.cssText = `
-      position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
-      background: rgba(0,0,0,0.9); display: flex; align-items: center; 
-      justify-content: center; z-index: 200;
-    `;
-    modal.innerHTML = `
-      <div style="background: #1a1a1a; border: 2px solid #4facfe; border-radius: 10px; 
-                  padding: 20px; width: 95%; height: 95%; display: flex; flex-direction: column;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-          <h2 style="color: #4facfe;">${selectedAvatar.emoji} ${selectedAvatar.name} - ${selectedAvatar.description}</h2>
-          <button id="close-avatar-btn" style="background: #ea4335; color: white; border: none; 
-                  padding: 8px 15px; border-radius: 5px; cursor: pointer; font-size: 14px;">
-            閉じる
-          </button>
-        </div>
-        <div id="avatar-container" style="flex: 1; background: #000; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;">
-          <div style="color: #4facfe; text-align: center; font-size: 18px;">
-            <p>${selectedAvatar.emoji}</p>
-            <p>${selectedAvatar.name}アバター</p>
-            <p style="font-size: 12px; color: #888; margin-top: 10px;">モデルの読み込み中...</p>
-          </div>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(modal);
-    
-    // VRM アバターをロード
-    try {
-      const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
-      const { VRMLoaderPlugin } = await import('@pixiv/three-vrm');
-      const THREE = await import('three');
-      
-      const container = document.querySelector('#avatar-container')!;
-      container.innerHTML = '';
-      
-      // Three.js シーンセットアップ
-      const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
-      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-      
-      renderer.setSize(container.clientWidth, container.clientHeight);
-      renderer.setClearColor(0x000000, 1);
-      container.appendChild(renderer.domElement);
-      
-      camera.position.set(0, 1, 2);
-      scene.add(new THREE.AmbientLight(0xffffff, 0.8));
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-      directionalLight.position.set(5, 5, 5);
-      scene.add(directionalLight);
-      
-      // VRM ロード
-      const loader = new GLTFLoader();
-      loader.register((ext: any) => new VRMLoaderPlugin(ext));
-      
-      try {
-        console.log('Loading avatar model:', selectedAvatar.modelPath);
-        const model = await loader.loadAsync(selectedAvatar.modelPath);
-        scene.add(model.scene);
-        console.log('Avatar model loaded successfully');
-        
-        const animate = () => {
-          requestAnimationFrame(animate);
-          model.scene.rotation.y += 0.005; // アバターを回転させて表示
-          renderer.render(scene, camera);
-        };
-        animate();
-      } catch (vrmError) {
-        console.error('Avatar loading error:', vrmError);
-        const errorMessage = vrmError instanceof Error ? vrmError.message : String(vrmError);
-        container.innerHTML = `<p style="color: #ff6b6b; text-align: center; padding-top: 50px;">
-          ${selectedAvatar.emoji}<br>
-          ${selectedAvatar.name}のモデルが見つかりません。<br>
-          <small style="color: #888;">パス: ${selectedAvatar.modelPath}</small><br>
-          <small style="color: #ff9999; margin-top: 10px;">エラー: ${errorMessage}</small>
-        </p>`;
-      }
-    } catch (error) {
-      console.error('アバター読み込みエラー:', error);
-      const container = document.querySelector('#avatar-container')!;
-      container.innerHTML = `<p style="color: #ff6b6b; text-align: center; padding-top: 50px;">
-        アバターの読み込みに失敗しました。<br>
-        <small>${error}</small>
-      </p>`;
-    }
-    
-    // 閉じるボタン
-    document.querySelector('#close-avatar-btn')?.addEventListener('click', () => {
-      modal.remove();
-      btn.classList.remove('active');
-    });
-    
-    // モーダル外クリックで閉じる
-    modal.addEventListener('click', (event: Event) => {
-      if (event.target === modal) {
-        modal.remove();
-        btn.classList.remove('active');
-      }
-    });
-  });
-});
+// 顔画像アバターボタンのセットアップ
+setupFaceAvatarButtonHandler('avatar-btn');
 
 // ボイスチェンジャーボタンのセットアップ
 setupVoiceChangerButtonHandler();
@@ -366,7 +245,6 @@ function join() {
   // 設定を保存
   SettingsManager.setUserName(myName);
   SettingsManager.setLastRoomName(room);
-  SettingsManager.setSelectedAvatarId(avatarManager.getCurrentAvatarId());
   
   statusBadge.innerText = `${myName}として接続中...`;
   tryNextSeat(`vFINAL-${room}`, 1);
