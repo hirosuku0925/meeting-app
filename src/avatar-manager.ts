@@ -11,12 +11,6 @@ const getBasePath = (): string => {
     return baseUrl;
   }
   
-  // 開発環境での検出: location.pathname から判断
-  const pathname = window.location.pathname;
-  if (pathname.includes('/meeting-app/')) {
-    return '/meeting-app/';
-  }
-  
   // デフォルト
   return '/';
 };
