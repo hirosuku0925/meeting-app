@@ -212,8 +212,10 @@ document.querySelector('#avatar-btn')?.addEventListener('click', async (e: Event
       loader.register((ext: any) => new VRMLoaderPlugin(ext));
       
       try {
+        console.log('Loading avatar model:', selectedAvatar.modelPath);
         const model = await loader.loadAsync(selectedAvatar.modelPath);
         scene.add(model.scene);
+        console.log('Avatar model loaded successfully');
         
         const animate = () => {
           requestAnimationFrame(animate);
@@ -222,10 +224,13 @@ document.querySelector('#avatar-btn')?.addEventListener('click', async (e: Event
         };
         animate();
       } catch (vrmError) {
+        console.error('Avatar loading error:', vrmError);
+        const errorMessage = vrmError instanceof Error ? vrmError.message : String(vrmError);
         container.innerHTML = `<p style="color: #ff6b6b; text-align: center; padding-top: 50px;">
           ${selectedAvatar.emoji}<br>
           ${selectedAvatar.name}のモデルが見つかりません。<br>
-          <small style="color: #888;">パス: ${selectedAvatar.modelPath}</small>
+          <small style="color: #888;">パス: ${selectedAvatar.modelPath}</small><br>
+          <small style="color: #ff9999; margin-top: 10px;">エラー: ${errorMessage}</small>
         </p>`;
       }
     } catch (error) {

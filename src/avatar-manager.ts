@@ -3,8 +3,25 @@
  * 複数のアバターを管理し、切り替え機能を提供
  */
 
-// Vite の import.meta.env.BASE_URL を使用してベースパスを取得
-const BASE_PATH = import.meta.env.BASE_URL || '/meeting-app/';
+// ベースパスを動的に決定
+// Vite の base path か、現在の URL のパスプレフィックスを使用
+const getBasePath = (): string => {
+  const baseUrl = import.meta.env.BASE_URL;
+  if (baseUrl && baseUrl !== '/') {
+    return baseUrl;
+  }
+  
+  // 開発環境での検出: location.pathname から判断
+  const pathname = window.location.pathname;
+  if (pathname.includes('/meeting-app/')) {
+    return '/meeting-app/';
+  }
+  
+  // デフォルト
+  return '/';
+};
+
+const BASE_PATH = getBasePath();
 
 export interface Avatar {
   id: string;

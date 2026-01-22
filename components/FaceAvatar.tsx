@@ -4,6 +4,7 @@ import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import * as THREE from 'three';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 import VRMFaceSync from '../src/vrm-face-sync';
+import { FaceImageManager, FaceImageSet } from '../src/face-image-manager';
 
 export default function FaceAvatar() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -16,21 +17,18 @@ export default function FaceAvatar() {
   const vrmRef = useRef<any>(null);
   const faceLandmarkerRef = useRef<FaceLandmarker | null>(null);
   const frmSyncRef = useRef<VRMFaceSync | null>(null);
-
-  // VRMアバターと顔認識の表情マッピング
-  const expressionMap: { [key: string]: string } = {
-    'mouthSmileLeft': 'smile',
-    'mouthSmileRight': 'smile',
-    'eyeWideLeft': 'surprised',
-    'eyeWideRight': 'surprised',
-    'eyeSquintLeft': 'sadness',
-    'eyeSquintRight': 'sadness',
-    'mouthFunnel': 'surprised'
-  };
+  const faceImageManagerRef = useRef<FaceImageManager | null>(null);
 
   useEffect(() => {
     setupVRMScene();
     setupFaceLandmarker();
+    
+    return () => {
+      // クリーンアップ
+      if (faceImageManagerRef.current) {
+        faceImageManagerRef.current.dispose();
+      }
+    };
   }, []);
 
   const setupVRMScene = async () => {
@@ -66,6 +64,21 @@ export default function FaceAvatar() {
       frmSyncRef.current = new VRMFaceSync(vrmRef.current);
       frmSyncRef.current.setSmoothingFactor(0.7); // スムージング設定
       scene.add(model.scene);
+
+      // 顔画像マネージャーを初期化
+      faceImageManagerRef.current = new FaceImageManager();
+      
+      // サンプル画像セットを設定（実際の使用時は適切なURLを設定してください）
+      const faceImages: FaceImageSet = {
+        neutral: '/meeting-app/sample-neutral.png',      // 通常時の画像
+        happy: '/meeting-app/sample-happy.png',          // 笑顔時の画像
+        surprised: '/meeting-app/sample-surprised.png',  // 驚き時の画像
+        angry: '/meeting-app/sample-angry.png',          // 怒り時の画像
+        sad: '/meeting-app/sample-sad.png'               // 悲しい時の画像
+      };
+      
+      faceImageManagerRef.current.setImageSet(faceImages);
+      await faceImageManagerRef.current.applyFaceTexture(vrmRef.current);
     } catch (e) {
       console.log('VRMファイルが見つかりません。URLを確認してください。', e);
     }
@@ -123,6 +136,11 @@ export default function FaceAvatar() {
     // VRMの表情を顔の表現に基づいて更新
     if (frmSyncRef.current && results.faceBlendshapes && results.faceBlendshapes.length > 0) {
       frmSyncRef.current.applyBlendshapes(results.faceBlendshapes[0] as any);
+      
+      // 顔画像マネージャーに表情を更新
+      if (faceImageManagerRef.current) {
+        faceImageManagerRef.current.updateExpressionWeights(results.faceBlendshapes[0] as any);
+      }
     }
 
     requestAnimationFrame(detect);

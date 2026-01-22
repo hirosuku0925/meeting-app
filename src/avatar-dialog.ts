@@ -1,4 +1,3 @@
-import type { Avatar } from '../src/avatar-manager';
 import { AVATARS } from '../src/avatar-manager';
 
 /**
