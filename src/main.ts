@@ -2,6 +2,8 @@ import './style.css'
 import { Peer, MediaConnection, DataConnection } from 'peerjs'
 import avatarManager from './avatar-manager'
 import { createAvatarDialog, setupAvatarCardClickHandler } from './avatar-dialog'
+import voiceChangerManager from './voice-changer-manager'
+import { setupVoiceChangerButtonHandler } from './voice-changer-dialog'
 import SettingsManager from './settings-manager'
 
 // --- 1. スタイル設定 ---
@@ -45,6 +47,7 @@ if (app) {
         <div class="ctrl-group"><button id="chat-toggle-btn" class="tool-btn">💬</button><span>チャット</span></div>
         <div class="ctrl-group"><button id="record-btn" class="tool-btn">🔴</button><span>録画</span></div>
         <div class="ctrl-group"><button id="avatar-btn" class="tool-btn">🎭</button><span>アバター</span></div>
+        <div class="ctrl-group"><button id="voice-changer-btn" class="tool-btn">🎙️</button><span>ボイス</span></div>
         
         <div style="width: 1px; height: 40px; background: #444; margin: 0 5px;"></div>
         
@@ -84,6 +87,22 @@ async function init() {
       video: true,
       audio: { echoCancellation: true, noiseSuppression: true }
     });
+
+    // ボイスチェンジャーを初期化
+    try {
+      const changedStream = await voiceChangerManager.init(localStream);
+      // オーディオトラックをボイスチェンジャー出力に置き換え
+      const originalAudioTrack = localStream.getAudioTracks()[0];
+      const changedAudioTrack = changedStream.getAudioTracks()[0];
+      
+      if (originalAudioTrack && changedAudioTrack) {
+        localStream.removeTrack(originalAudioTrack);
+        localStream.addTrack(changedAudioTrack);
+      }
+    } catch (voiceChangerError) {
+      console.warn('ボイスチェンジャーの初期化に失敗しました:', voiceChangerError);
+    }
+
     localVideo.srcObject = localStream;
     bigVideo.srcObject = localStream;
     statusBadge.innerText = "準備完了！名前とルーム名を入力して参加してください";
@@ -257,6 +276,9 @@ document.querySelector('#avatar-btn')?.addEventListener('click', async (e: Event
     });
   });
 });
+
+// ボイスチェンジャーボタンのセットアップ
+setupVoiceChangerButtonHandler();
 
 document.querySelector('#mic-btn')?.addEventListener('click', (e: Event) => {
   if (!localStream) return;
