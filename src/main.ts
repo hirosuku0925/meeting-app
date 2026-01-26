@@ -71,7 +71,7 @@ const needleFrame = document.querySelector<HTMLIFrameElement>('#needle-frame')!;
 
 let localStream: MediaStream;
 let peer: Peer | null = null;
-const connectedPeers = new Set<string>();
+const connectedPeers = new Map<string, MediaConnection>();
 
 async function init() {
   try {
@@ -90,32 +90,34 @@ async function init() {
 }
 
 function handleCall(call: MediaConnection) {
-  // 💡 自分自身との接続を防止
+  // 自分自身や重複を排除
   if (peer && call.peer === peer.id) return;
   if (connectedPeers.has(call.peer)) return;
-  connectedPeers.add(call.peer);
+  connectedPeers.set(call.peer, call);
 
   call.on('stream', (remoteStream) => {
-    if (document.getElementById(`container-${call.peer}`)) return;
+    let v = document.getElementById(`video-${call.peer}`) as HTMLVideoElement;
+    if (v) return;
 
     const container = document.createElement('div');
     container.id = `container-${call.peer}`;
     container.className = "video-container";
 
-    const v = document.createElement('video');
+    v = document.createElement('video');
+    v.id = `video-${call.peer}`;
     v.className = "remote-video";
     v.autoplay = true;
     v.playsInline = true;
     v.srcObject = remoteStream;
 
-    // 💡 黒画面徹底対策：自動再生を監視
+    // 再生監視
     const playInterval = setInterval(() => {
       if (v.paused && v.readyState >= 2) {
         v.play().catch(() => {});
       } else if (!v.paused) {
         clearInterval(playInterval);
       }
-    }, 500);
+    }, 1000);
 
     container.appendChild(v);
     videoGrid.appendChild(container);
@@ -123,7 +125,6 @@ function handleCall(call: MediaConnection) {
     container.onclick = () => { 
       bigVideo.srcObject = remoteStream;
       bigVideo.style.opacity = '1';
-      bigVideo.muted = false; 
       needleFrame.style.display = 'none';
       document.querySelector('#avatar-btn')?.classList.remove('active');
     };
@@ -138,24 +139,23 @@ function handleCall(call: MediaConnection) {
 function startConnection(room: string) {
   if (peer) peer.destroy();
   connectedPeers.clear();
+  videoGrid.innerHTML = ''; // グリッドを清掃
 
   const tryJoin = (index: number) => {
     const myId = `vFINAL-${room}-${index}`;
     peer = new Peer(myId);
 
     peer.on('open', (id) => {
-      statusBadge.innerText = `入室成功: 席${index}`;
+      statusBadge.innerText = `席${index}に入室`;
       
-      // 💡 自分のID確定後、0.8秒待ってから発信
       setTimeout(() => {
         for (let i = 1; i < index; i++) {
           const targetId = `vFINAL-${room}-${i}`;
-          if (targetId === id) continue; // 自分への電話をスキップ
-          
+          if (targetId === id) continue; // 自分なら飛ばす
           const call = peer!.call(targetId, localStream);
           if (call) handleCall(call);
         }
-      }, 800);
+      }, 1000);
     });
 
     peer.on('call', (call) => {
@@ -165,6 +165,7 @@ function startConnection(room: string) {
 
     peer.on('error', (err) => {
       if (err.type === 'unavailable-id') tryJoin(index + 1);
+      else console.error("Peer Error:", err);
     });
   };
   tryJoin(1);
@@ -178,20 +179,21 @@ document.querySelector('#join-btn')?.addEventListener('click', () => {
 });
 
 document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
-  const isCurrentlyOff = needleFrame.style.display === 'none' || needleFrame.style.display === '';
   const btn = e.currentTarget as HTMLElement;
-  const videoTrack = localStream.getVideoTracks()[0];
+  const isNowOff = needleFrame.style.display === 'none' || needleFrame.style.display === '';
 
-  if (isCurrentlyOff) {
+  if (isNowOff) {
+    // アバターON
     needleFrame.style.display = 'block';
     bigVideo.style.opacity = '0';
     btn.classList.add('active');
-    if (videoTrack) videoTrack.enabled = false;
+    // 💡 映像トラックは止めない（黒画面対策）。
+    // その代わり、送信側のカメラをミュートにするなどの処理が必要な場合はここで行う
   } else {
+    // アバターOFF
     needleFrame.style.display = 'none';
     bigVideo.style.opacity = '1';
     btn.classList.remove('active');
-    if (videoTrack) videoTrack.enabled = true;
   }
 });
 
