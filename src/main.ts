@@ -5,7 +5,7 @@ import { setupVoiceChangerButtonHandler } from './voice-changer-dialog'
 import { setupFaceAvatarButtonHandler } from './face-image-avatar-dialog'
 import SettingsManager from './settings-manager'
 
-// --- 1. スタイル設定 (相手の枠が見えるように修正) ---
+// --- 1. スタイル設定 ---
 const globalStyle = document.createElement('style');
 globalStyle.textContent = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -18,10 +18,10 @@ globalStyle.textContent = `
   #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; }
   video { background: #222; border-radius: 8px; transition: opacity 0.3s; }
   
-  /* 自分自身の素顔は常に非表示 */
+  /* 自分のプレビュー（小窓）は隠してメイン画面(big-video)で見る */
   #local-video { display: none !important; }
 
-  /* 相手のビデオ枠：サイズを明示的に指定 */
+  /* 相手のビデオ枠 */
   .video-container { 
     position: relative; 
     width: 200px; 
@@ -31,11 +31,10 @@ globalStyle.textContent = `
     overflow: hidden; 
     cursor: pointer;
     border: 2px solid #333;
+    flex-shrink: 0;
   }
   .video-container:hover { border-color: #4facfe; }
-  
   .remote-video { width: 100%; height: 100%; object-fit: cover; }
-  .remote-avatar { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; z-index: 2; pointer-events: none; }
 `;
 document.head.appendChild(globalStyle);
 
@@ -67,6 +66,7 @@ if (app) {
   `;
 }
 
+// --- 3. 変数管理 ---
 const bigVideo = document.querySelector<HTMLVideoElement>('#big-video')!;
 const localVideo = document.querySelector<HTMLVideoElement>('#local-video')!;
 const videoGrid = document.querySelector<HTMLDivElement>('#video-grid')!;
@@ -75,8 +75,9 @@ const needleFrame = document.querySelector<HTMLIFrameElement>('#needle-frame')!;
 
 let localStream: MediaStream;
 let peer: Peer | null = null;
-let myName = "ゲスト";
 const connectedPeers = new Set<string>();
+
+// --- 4. 接続メインロジック ---
 
 async function init() {
   try {
@@ -86,6 +87,7 @@ async function init() {
     });
     localVideo.srcObject = localStream;
     bigVideo.srcObject = localStream;
+    
     setupVoiceChangerButtonHandler();
     setupFaceAvatarButtonHandler('avatar-btn');
     statusBadge.innerText = "準備完了";
@@ -99,34 +101,25 @@ function handleCall(call: MediaConnection) {
   call.on('stream', (remoteStream) => {
     if (document.getElementById(`container-${call.peer}`)) return;
 
-    // 1. コンテナ作成
+    // 相手の映像コンテナ作成（アバターは乗せない設定）
     const container = document.createElement('div');
     container.id = `container-${call.peer}`;
     container.className = "video-container";
 
-    // 2. ビデオ要素作成
     const v = document.createElement('video');
     v.className = "remote-video";
     v.srcObject = remoteStream;
     v.autoplay = true;
     v.playsInline = true;
 
-    // 3. 相手用アバターiframe作成
-    const avatar = document.createElement('iframe');
-    avatar.className = "remote-avatar";
-    avatar.src = "https://engine.needle.tools/samples-uploads/facefilter/?";
-    avatar.allow = "camera; microphone";
-
     container.appendChild(v);
-    container.appendChild(avatar);
     videoGrid.appendChild(container);
 
-    // 4. クリックでメイン画面を相手に切り替え
     container.onclick = () => { 
       bigVideo.srcObject = remoteStream;
       bigVideo.style.opacity = '1';
       bigVideo.muted = false; // 相手の声を聞こえるように
-      needleFrame.style.display = 'none'; // メインのアバターは消す
+      needleFrame.style.display = 'none'; // メイン画面のアバターを隠す
       document.querySelector('#avatar-btn')?.classList.remove('active');
     };
   });
@@ -139,21 +132,28 @@ function handleCall(call: MediaConnection) {
 
 function startConnection(room: string) {
   if (peer) peer.destroy();
+  connectedPeers.clear();
+
   const tryJoin = (index: number) => {
     const peerId = `vFINAL-${room}-${index}`;
     peer = new Peer(peerId);
+
     peer.on('open', () => {
-      statusBadge.innerText = `入室中: ${myName} (席:${index})`;
+      statusBadge.innerText = `入室成功: 席${index}`;
+      // 自分より前の人に電話をかける
       for (let i = 1; i < index; i++) {
         const targetId = `vFINAL-${room}-${i}`;
         const call = peer!.call(targetId, localStream);
         if (call) handleCall(call);
       }
     });
+
+    // 大事：電話がかかってきたら応答する（これでゲスト1からも相手が見える）
     peer.on('call', (call) => {
       call.answer(localStream);
       handleCall(call);
     });
+
     peer.on('error', (err) => {
       if (err.type === 'unavailable-id') tryJoin(index + 1);
     });
@@ -161,21 +161,33 @@ function startConnection(room: string) {
   tryJoin(1);
 }
 
+// --- 5. UIイベント ---
+
 document.querySelector('#join-btn')?.addEventListener('click', () => {
   const room = (document.querySelector('#room-input') as HTMLInputElement).value;
   if (!room) return alert("部屋名を入力してください");
   startConnection(room);
 });
 
+// アバター切り替え：最初はOFF、押すとON（相手への送信停止）
 document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
-  const isVisible = needleFrame.style.display === 'block';
-  needleFrame.style.display = isVisible ? 'none' : 'block';
-  bigVideo.style.opacity = isVisible ? '1' : '0';
-  (e.currentTarget as HTMLElement).classList.toggle('active', !isVisible);
-  
-  // 自分のカメラ送信を停止（相手に素顔を見せない）
+  const isCurrentlyOff = needleFrame.style.display === 'none' || needleFrame.style.display === '';
+  const btn = e.currentTarget as HTMLElement;
   const videoTrack = localStream.getVideoTracks()[0];
-  if (videoTrack) videoTrack.enabled = isVisible; 
+
+  if (isCurrentlyOff) {
+    // アバターONにする
+    needleFrame.style.display = 'block';
+    bigVideo.style.opacity = '0';
+    btn.classList.add('active');
+    if (videoTrack) videoTrack.enabled = false; // 素顔を隠す
+  } else {
+    // アバターOFF（ふつうのカメラ）
+    needleFrame.style.display = 'none';
+    bigVideo.style.opacity = '1';
+    btn.classList.remove('active');
+    if (videoTrack) videoTrack.enabled = true; // 素顔を映す
+  }
 });
 
 init();
