@@ -1,11 +1,11 @@
 import './style.css'
-import { Peer, type MediaConnection, type DataConnection } from 'peerjs'
+import { Peer, type MediaConnection } from 'peerjs'
 import voiceChangerManager from './voice-changer-manager'
 import { setupVoiceChangerButtonHandler } from './voice-changer-dialog'
 import { setupFaceAvatarButtonHandler } from './face-image-avatar-dialog'
 import SettingsManager from './settings-manager'
 
-// --- 1. スタイル設定 ---
+// --- 1. スタイル設定 (相手の枠が見えるように修正) ---
 const globalStyle = document.createElement('style');
 globalStyle.textContent = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -14,19 +14,32 @@ globalStyle.textContent = `
   .tool-btn:hover { background: #444; transform: scale(1.1); }
   .ctrl-group { display: flex; flex-direction: column; align-items: center; font-size: 10px; color: #888; gap: 4px; }
   .active { background: #4facfe !important; }
+  
   #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; }
   video { background: #222; border-radius: 8px; transition: opacity 0.3s; }
   
-  /* 自分自身の素顔は常に非表示（プライバシー） */
+  /* 自分自身の素顔は常に非表示 */
   #local-video { display: none !important; }
 
-  /* ビデオ枠を重ねるためのコンテナスタイル */
-  .video-container { position: relative; height: 100%; min-width: 150px; background: #222; border-radius: 8px; overflow: hidden; }
-  .remote-avatar { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; z-index: 2; }
+  /* 相手のビデオ枠：サイズを明示的に指定 */
+  .video-container { 
+    position: relative; 
+    width: 200px; 
+    height: 150px; 
+    background: #222; 
+    border-radius: 8px; 
+    overflow: hidden; 
+    cursor: pointer;
+    border: 2px solid #333;
+  }
+  .video-container:hover { border-color: #4facfe; }
+  
+  .remote-video { width: 100%; height: 100%; object-fit: cover; }
+  .remote-avatar { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; z-index: 2; pointer-events: none; }
 `;
 document.head.appendChild(globalStyle);
 
-// --- 2. HTML構造 (変更なし) ---
+// --- 2. HTML構造 ---
 const app = document.querySelector<HTMLDivElement>('#app');
 if (app) {
   app.innerHTML = `
@@ -54,7 +67,6 @@ if (app) {
   `;
 }
 
-// --- 変数管理 ---
 const bigVideo = document.querySelector<HTMLVideoElement>('#big-video')!;
 const localVideo = document.querySelector<HTMLVideoElement>('#local-video')!;
 const videoGrid = document.querySelector<HTMLDivElement>('#video-grid')!;
@@ -66,8 +78,6 @@ let peer: Peer | null = null;
 let myName = "ゲスト";
 const connectedPeers = new Set<string>();
 
-// --- 4. 接続メインロジック (ここを修正) ---
-
 async function init() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ 
@@ -76,10 +86,9 @@ async function init() {
     });
     localVideo.srcObject = localStream;
     bigVideo.srcObject = localStream;
-    localVideo.muted = true;
-    bigVideo.muted = true;
     setupVoiceChangerButtonHandler();
     setupFaceAvatarButtonHandler('avatar-btn');
+    statusBadge.innerText = "準備完了";
   } catch (e) { statusBadge.innerText = "カメラを許可してください"; }
 }
 
@@ -90,19 +99,19 @@ function handleCall(call: MediaConnection) {
   call.on('stream', (remoteStream) => {
     if (document.getElementById(`container-${call.peer}`)) return;
 
-    // 相手の映像を入れるコンテナを作成
+    // 1. コンテナ作成
     const container = document.createElement('div');
     container.id = `container-${call.peer}`;
     container.className = "video-container";
 
-    // 相手の素顔ビデオ（下層）
+    // 2. ビデオ要素作成
     const v = document.createElement('video');
+    v.className = "remote-video";
     v.srcObject = remoteStream;
     v.autoplay = true;
     v.playsInline = true;
-    v.style.height = "100%";
 
-    // 【重要】相手の映像の上にも自動でアバターを重ねる！
+    // 3. 相手用アバターiframe作成
     const avatar = document.createElement('iframe');
     avatar.className = "remote-avatar";
     avatar.src = "https://engine.needle.tools/samples-uploads/facefilter/?";
@@ -112,15 +121,22 @@ function handleCall(call: MediaConnection) {
     container.appendChild(avatar);
     videoGrid.appendChild(container);
 
+    // 4. クリックでメイン画面を相手に切り替え
     container.onclick = () => { 
       bigVideo.srcObject = remoteStream;
       bigVideo.style.opacity = '1';
-      bigVideo.muted = false;
+      bigVideo.muted = false; // 相手の声を聞こえるように
+      needleFrame.style.display = 'none'; // メインのアバターは消す
+      document.querySelector('#avatar-btn')?.classList.remove('active');
     };
+  });
+
+  call.on('close', () => {
+    document.getElementById(`container-${call.peer}`)?.remove();
+    connectedPeers.delete(call.peer);
   });
 }
 
-// 接続開始・UIイベントなどは既存のコードと同じ
 function startConnection(room: string) {
   if (peer) peer.destroy();
   const tryJoin = (index: number) => {
@@ -151,13 +167,13 @@ document.querySelector('#join-btn')?.addEventListener('click', () => {
   startConnection(room);
 });
 
-document.querySelector('#avatar-btn')?.addEventListener('click', () => {
+document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
   const isVisible = needleFrame.style.display === 'block';
   needleFrame.style.display = isVisible ? 'none' : 'block';
   bigVideo.style.opacity = isVisible ? '1' : '0';
-  document.querySelector('#avatar-btn')?.classList.toggle('active', !isVisible);
+  (e.currentTarget as HTMLElement).classList.toggle('active', !isVisible);
   
-  // 相手に送る映像トラックを止める（プライバシー保護）
+  // 自分のカメラ送信を停止（相手に素顔を見せない）
   const videoTrack = localStream.getVideoTracks()[0];
   if (videoTrack) videoTrack.enabled = isVisible; 
 });
