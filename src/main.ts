@@ -26,7 +26,7 @@ if (app) {
   app.innerHTML = `
     <div style="display: flex; height: 100vh; width: 100%; flex-direction: column;">
       <div id="main-display" style="height: 60vh; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
-        <video id="big-video" autoplay playsinline style="width: 100%; height: 100%; object-fit: contain;"></video>
+        <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain;"></video>
         <iframe id="needle-frame" src="https://engine.needle.tools/samples-uploads/facefilter/?" allow="camera; microphone; fullscreen"></iframe>
         <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 10;">準備中...</div>
       </div>
@@ -69,12 +69,24 @@ let chunks: Blob[] = [];
 
 async function init() {
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    // 【ノイズ抑制設定】
+    localStream = await navigator.mediaDevices.getUserMedia({ 
+      video: true, 
+      audio: {
+        echoCancellation: true, // エコーを消す
+        noiseSuppression: true,  // 背景ノイズを消す
+        autoGainControl: true    // 音量を自動調整する
+      } 
+    });
+
     localVideo.srcObject = localStream;
     bigVideo.srcObject = localStream;
-    statusBadge.innerText = "準備完了！部屋名を入れて参加してください";
+    // 自分の音は自分に聞こえないようにする（ハウリング防止の鉄則）
+    localVideo.muted = true;
+    bigVideo.muted = true;
 
-    // ダイアログ初期化
+    statusBadge.innerText = "準備完了！";
+
     setupVoiceChangerButtonHandler();
     setupFaceAvatarButtonHandler('avatar-btn');
     
@@ -99,8 +111,13 @@ function handleCall(call: MediaConnection) {
     v.srcObject = remoteStream;
     v.autoplay = true;
     v.playsInline = true;
+    v.muted = false; // 相手の音は出す
     v.style.cssText = "height: 100%; min-width: 150px; cursor: pointer;";
-    v.onclick = () => { bigVideo.srcObject = remoteStream; };
+    
+    v.onclick = () => { 
+      bigVideo.srcObject = remoteStream;
+      bigVideo.muted = false; // 相手を大きく映した時は音を出す
+    };
     videoGrid.appendChild(v);
   });
 
@@ -112,33 +129,25 @@ function handleCall(call: MediaConnection) {
 
 function startConnection(room: string) {
   if (peer) peer.destroy();
-  
-  // 席番号を自動で探すロジック (1~10番まで)
   const tryJoin = (index: number) => {
     const peerId = `vFINAL-${room}-${index}`;
     peer = new Peer(peerId);
-
     peer.on('open', () => {
       statusBadge.innerText = `入室中: ${myName} (席:${index})`;
-      // 他の席(自分より前の番号)に自分からかける
       for (let i = 1; i < index; i++) {
         const targetId = `vFINAL-${room}-${i}`;
         const call = peer!.call(targetId, localStream);
         if (call) handleCall(call);
       }
     });
-
     peer.on('call', (call) => {
       call.answer(localStream);
       handleCall(call);
     });
-
     peer.on('error', (err) => {
       if (err.type === 'unavailable-id') tryJoin(index + 1);
-      else console.error(err);
     });
   };
-
   tryJoin(1);
 }
 
@@ -163,6 +172,7 @@ document.querySelector('#share-btn')?.addEventListener('click', async (e) => {
   if (!screenStream) {
     screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
     bigVideo.srcObject = screenStream;
+    bigVideo.muted = true; // 画面共有中も自分の声がループしないように消音
     (e.currentTarget as HTMLElement).classList.add('active');
   } else {
     screenStream.getTracks().forEach(t => t.stop());
