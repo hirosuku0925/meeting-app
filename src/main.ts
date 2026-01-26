@@ -18,16 +18,14 @@ globalStyle.textContent = `
   #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; }
   video { background: #222; border-radius: 8px; transition: opacity 0.3s; }
   
-  /* 自分のプレビュー（小窓）は隠してメイン画面(big-video)で見る */
   #local-video { display: none !important; }
 
-  /* 相手のビデオ枠 */
   .video-container { 
     position: relative; 
-    width: 200px; 
-    height: 150px; 
+    width: 220px; 
+    height: 165px; 
     background: #222; 
-    border-radius: 8px; 
+    border-radius: 10px; 
     overflow: hidden; 
     cursor: pointer;
     border: 2px solid #333;
@@ -66,7 +64,6 @@ if (app) {
   `;
 }
 
-// --- 3. 変数管理 ---
 const bigVideo = document.querySelector<HTMLVideoElement>('#big-video')!;
 const localVideo = document.querySelector<HTMLVideoElement>('#local-video')!;
 const videoGrid = document.querySelector<HTMLDivElement>('#video-grid')!;
@@ -87,6 +84,7 @@ async function init() {
     });
     localVideo.srcObject = localStream;
     bigVideo.srcObject = localStream;
+    bigVideo.style.opacity = '1';
     
     setupVoiceChangerButtonHandler();
     setupFaceAvatarButtonHandler('avatar-btn');
@@ -101,16 +99,20 @@ function handleCall(call: MediaConnection) {
   call.on('stream', (remoteStream) => {
     if (document.getElementById(`container-${call.peer}`)) return;
 
-    // 相手の映像コンテナ作成（アバターは乗せない設定）
     const container = document.createElement('div');
     container.id = `container-${call.peer}`;
     container.className = "video-container";
 
     const v = document.createElement('video');
     v.className = "remote-video";
-    v.srcObject = remoteStream;
     v.autoplay = true;
     v.playsInline = true;
+    v.srcObject = remoteStream;
+
+    // 💡 黒画面対策：データが読み込まれたら再生
+    v.onloadedmetadata = () => {
+      v.play().catch(console.error);
+    };
 
     container.appendChild(v);
     videoGrid.appendChild(container);
@@ -118,8 +120,8 @@ function handleCall(call: MediaConnection) {
     container.onclick = () => { 
       bigVideo.srcObject = remoteStream;
       bigVideo.style.opacity = '1';
-      bigVideo.muted = false; // 相手の声を聞こえるように
-      needleFrame.style.display = 'none'; // メイン画面のアバターを隠す
+      bigVideo.muted = false; 
+      needleFrame.style.display = 'none';
       document.querySelector('#avatar-btn')?.classList.remove('active');
     };
   });
@@ -140,7 +142,6 @@ function startConnection(room: string) {
 
     peer.on('open', () => {
       statusBadge.innerText = `入室成功: 席${index}`;
-      // 自分より前の人に電話をかける
       for (let i = 1; i < index; i++) {
         const targetId = `vFINAL-${room}-${i}`;
         const call = peer!.call(targetId, localStream);
@@ -148,7 +149,6 @@ function startConnection(room: string) {
       }
     });
 
-    // 大事：電話がかかってきたら応答する（これでゲスト1からも相手が見える）
     peer.on('call', (call) => {
       call.answer(localStream);
       handleCall(call);
@@ -169,24 +169,21 @@ document.querySelector('#join-btn')?.addEventListener('click', () => {
   startConnection(room);
 });
 
-// アバター切り替え：最初はOFF、押すとON（相手への送信停止）
 document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
   const isCurrentlyOff = needleFrame.style.display === 'none' || needleFrame.style.display === '';
   const btn = e.currentTarget as HTMLElement;
   const videoTrack = localStream.getVideoTracks()[0];
 
   if (isCurrentlyOff) {
-    // アバターONにする
     needleFrame.style.display = 'block';
     bigVideo.style.opacity = '0';
     btn.classList.add('active');
-    if (videoTrack) videoTrack.enabled = false; // 素顔を隠す
+    if (videoTrack) videoTrack.enabled = false;
   } else {
-    // アバターOFF（ふつうのカメラ）
     needleFrame.style.display = 'none';
     bigVideo.style.opacity = '1';
     btn.classList.remove('active');
-    if (videoTrack) videoTrack.enabled = true; // 素顔を映す
+    if (videoTrack) videoTrack.enabled = true;
   }
 });
 
