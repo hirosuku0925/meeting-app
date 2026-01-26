@@ -17,7 +17,6 @@ globalStyle.textContent = `
   
   #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; }
   video { background: #222; border-radius: 8px; transition: opacity 0.3s; }
-  
   #local-video { display: none !important; }
 
   .video-container { 
@@ -109,10 +108,14 @@ function handleCall(call: MediaConnection) {
     v.playsInline = true;
     v.srcObject = remoteStream;
 
-    // 💡 黒画面対策：データが読み込まれたら再生
-    v.onloadedmetadata = () => {
-      v.play().catch(console.error);
-    };
+    // 💡 黒画面徹底対策：映像が止まっていないか定期的にチェックして再生する
+    const playInterval = setInterval(() => {
+      if (v.paused && v.readyState >= 2) {
+        v.play().catch(() => {});
+      } else if (!v.paused) {
+        clearInterval(playInterval); // 無事再生されたらチェック終了
+      }
+    }, 500);
 
     container.appendChild(v);
     videoGrid.appendChild(container);
@@ -142,11 +145,15 @@ function startConnection(room: string) {
 
     peer.on('open', () => {
       statusBadge.innerText = `入室成功: 席${index}`;
-      for (let i = 1; i < index; i++) {
-        const targetId = `vFINAL-${room}-${i}`;
-        const call = peer!.call(targetId, localStream);
-        if (call) handleCall(call);
-      }
+      
+      // 💡 電話をかける前に一瞬待つ（カメラの準備時間を確保）
+      setTimeout(() => {
+        for (let i = 1; i < index; i++) {
+          const targetId = `vFINAL-${room}-${i}`;
+          const call = peer!.call(targetId, localStream);
+          if (call) handleCall(call);
+        }
+      }, 500);
     });
 
     peer.on('call', (call) => {
