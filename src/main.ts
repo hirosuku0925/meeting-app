@@ -16,7 +16,10 @@ globalStyle.textContent = `
   .active { background: #4facfe !important; }
   .off { background: #ea4335 !important; }
   #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; }
-  video { background: #222; border-radius: 8px; }
+  video { background: #222; border-radius: 8px; transition: opacity 0.3s; }
+  
+  /* プライバシー保護：自分の素顔（local-video）を画面から完全に消す */
+  #local-video { display: none !important; }
 `;
 document.head.appendChild(globalStyle);
 
@@ -44,7 +47,7 @@ if (app) {
       </div>
 
       <div id="video-grid" style="flex: 1; background: #000; display: flex; gap: 10px; padding: 10px; overflow-x: auto; align-items: center; justify-content: center;">
-        <video id="local-video" autoplay playsinline muted style="height: 100%; border: 2px solid #4facfe; object-fit: cover;"></video>
+        <video id="local-video" autoplay playsinline muted></video>
       </div>
     </div>
   `;
@@ -69,19 +72,15 @@ let chunks: Blob[] = [];
 
 async function init() {
   try {
-    // 【ノイズ抑制設定】
     localStream = await navigator.mediaDevices.getUserMedia({ 
       video: true, 
-      audio: {
-        echoCancellation: true, // エコーを消す
-        noiseSuppression: true,  // 背景ノイズを消す
-        autoGainControl: true    // 音量を自動調整する
-      } 
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
     });
 
     localVideo.srcObject = localStream;
     bigVideo.srcObject = localStream;
-    // 自分の音は自分に聞こえないようにする（ハウリング防止の鉄則）
+    
+    // ハウリング防止
     localVideo.muted = true;
     bigVideo.muted = true;
 
@@ -90,7 +89,6 @@ async function init() {
     setupVoiceChangerButtonHandler();
     setupFaceAvatarButtonHandler('avatar-btn');
     
-    // ボイスチェンジャー適用
     const changedStream = await voiceChangerManager.init(localStream);
     const audioTrack = changedStream.getAudioTracks()[0];
     if (audioTrack) {
@@ -111,12 +109,14 @@ function handleCall(call: MediaConnection) {
     v.srcObject = remoteStream;
     v.autoplay = true;
     v.playsInline = true;
-    v.muted = false; // 相手の音は出す
     v.style.cssText = "height: 100%; min-width: 150px; cursor: pointer;";
-    
     v.onclick = () => { 
       bigVideo.srcObject = remoteStream;
-      bigVideo.muted = false; // 相手を大きく映した時は音を出す
+      // 相手を映すときはアバターを隠して音を出す
+      needleFrame.style.display = 'none';
+      bigVideo.style.opacity = '1';
+      bigVideo.muted = false;
+      document.querySelector('#avatar-btn')?.classList.remove('active');
     };
     videoGrid.appendChild(v);
   });
@@ -162,17 +162,29 @@ document.querySelector('#join-btn')?.addEventListener('click', () => {
   startConnection(room);
 });
 
+// アバターボタンの処理をプライバシー重視に改造
 document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
-  const isActive = needleFrame.style.display === 'block';
-  needleFrame.style.display = isActive ? 'none' : 'block';
-  (e.currentTarget as HTMLElement).classList.toggle('active', !isActive);
+  const isCurrentlyVisible = needleFrame.style.display === 'block';
+  
+  if (!isCurrentlyVisible) {
+    // アバターを出すとき：iframeを表示し、背後の素顔(bigVideo)を透明にする
+    needleFrame.style.display = 'block';
+    bigVideo.style.opacity = '0';
+    (e.currentTarget as HTMLElement).classList.add('active');
+  } else {
+    // アバターを消すとき：iframeを隠し、素顔を表示する
+    needleFrame.style.display = 'none';
+    bigVideo.style.opacity = '1';
+    (e.currentTarget as HTMLElement).classList.remove('active');
+  }
 });
 
 document.querySelector('#share-btn')?.addEventListener('click', async (e) => {
   if (!screenStream) {
     screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
     bigVideo.srcObject = screenStream;
-    bigVideo.muted = true; // 画面共有中も自分の声がループしないように消音
+    bigVideo.style.opacity = '1'; // 画面共有中は表示する
+    needleFrame.style.display = 'none';
     (e.currentTarget as HTMLElement).classList.add('active');
   } else {
     screenStream.getTracks().forEach(t => t.stop());
