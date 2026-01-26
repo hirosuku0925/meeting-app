@@ -73,8 +73,6 @@ let localStream: MediaStream;
 let peer: Peer | null = null;
 const connectedPeers = new Set<string>();
 
-// --- 4. 接続メインロジック ---
-
 async function init() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ 
@@ -92,6 +90,8 @@ async function init() {
 }
 
 function handleCall(call: MediaConnection) {
+  // 💡 自分自身との接続を防止
+  if (peer && call.peer === peer.id) return;
   if (connectedPeers.has(call.peer)) return;
   connectedPeers.add(call.peer);
 
@@ -108,12 +108,12 @@ function handleCall(call: MediaConnection) {
     v.playsInline = true;
     v.srcObject = remoteStream;
 
-    // 💡 黒画面徹底対策：映像が止まっていないか定期的にチェックして再生する
+    // 💡 黒画面徹底対策：自動再生を監視
     const playInterval = setInterval(() => {
       if (v.paused && v.readyState >= 2) {
         v.play().catch(() => {});
       } else if (!v.paused) {
-        clearInterval(playInterval); // 無事再生されたらチェック終了
+        clearInterval(playInterval);
       }
     }, 500);
 
@@ -140,20 +140,22 @@ function startConnection(room: string) {
   connectedPeers.clear();
 
   const tryJoin = (index: number) => {
-    const peerId = `vFINAL-${room}-${index}`;
-    peer = new Peer(peerId);
+    const myId = `vFINAL-${room}-${index}`;
+    peer = new Peer(myId);
 
-    peer.on('open', () => {
+    peer.on('open', (id) => {
       statusBadge.innerText = `入室成功: 席${index}`;
       
-      // 💡 電話をかける前に一瞬待つ（カメラの準備時間を確保）
+      // 💡 自分のID確定後、0.8秒待ってから発信
       setTimeout(() => {
         for (let i = 1; i < index; i++) {
           const targetId = `vFINAL-${room}-${i}`;
+          if (targetId === id) continue; // 自分への電話をスキップ
+          
           const call = peer!.call(targetId, localStream);
           if (call) handleCall(call);
         }
-      }, 500);
+      }, 800);
     });
 
     peer.on('call', (call) => {
@@ -168,8 +170,7 @@ function startConnection(room: string) {
   tryJoin(1);
 }
 
-// --- 5. UIイベント ---
-
+// --- UIイベント ---
 document.querySelector('#join-btn')?.addEventListener('click', () => {
   const room = (document.querySelector('#room-input') as HTMLInputElement).value;
   if (!room) return alert("部屋名を入力してください");
