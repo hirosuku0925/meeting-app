@@ -17,26 +17,12 @@ globalStyle.textContent = `
   .active { background: #4facfe !important; }
   
   #needle-guard { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: transparent; display: none; z-index: 6; }
-
-  .name-label {
-    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-    font-size: 24px; font-weight: bold; color: white; display: none; z-index: 2; text-shadow: 0 0 10px rgba(0,0,0,0.8);
-    pointer-events: none; white-space: nowrap;
-  }
-
-  /* 相手の画面用アバター画像 */
-  .remote-avatar {
-    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-    object-fit: contain; display: none; z-index: 3; pointer-events: none;
-    background: #1a1a1a;
-  }
-
-  /* 状態別の表示切り替え */
+  .name-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; font-weight: bold; color: white; display: none; z-index: 2; text-shadow: 0 0 10px rgba(0,0,0,0.8); pointer-events: none; white-space: nowrap; }
+  .remote-avatar { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; display: none; z-index: 3; pointer-events: none; background: #1a1a1a; }
   .camera-off .name-label { display: block; }
   .camera-off video { opacity: 0; }
   .avatar-active .remote-avatar { display: block; }
   .avatar-active video { opacity: 0; }
-
   #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; }
   .video-container { position: relative; height: 100%; min-width: 180px; background: #222; border-radius: 8px; overflow: hidden; cursor: pointer; border: 1px solid #333; }
 `;
@@ -59,13 +45,16 @@ app.innerHTML = `
         </div>
       </div>
     </div>
-    <div id="toolbar" style="height: 100px; background: #111; display: flex; align-items: center; justify-content: center; gap: 12px;">
+    <div id="toolbar" style="height: 100px; background: #111; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 0 10px;">
       <div class="ctrl-group"><button id="mic-btn" class="tool-btn">🎤</button><span>マイク</span></div>
       <div class="ctrl-group"><button id="cam-btn" class="tool-btn">📹</button><span>カメラ</span></div>
+      <div class="ctrl-group"><button id="share-btn" class="tool-btn">📺</button><span>画面共有</span></div>
+      <div class="ctrl-group"><button id="chat-toggle-btn" class="tool-btn">💬</button><span>チャット</span></div>
       <div class="ctrl-group"><button id="avatar-btn" class="tool-btn">🎭</button><span>アバター</span></div>
-      <input id="name-input" type="text" placeholder="名前" style="background: #222; border: 1px solid #444; color: white; padding: 10px; width: 90px;">
-      <input id="room-input" type="text" placeholder="部屋名" style="background: #222; border: 1px solid #444; color: white; padding: 10px; width: 90px;">
-      <button id="join-btn" style="background: #2ecc71; color: white; padding: 10px 15px; border-radius: 5px;">参加</button>
+      <div class="ctrl-group"><button id="voice-changer-btn" class="tool-btn">🎙️</button><span>ボイス</span></div>
+      <input id="name-input" type="text" placeholder="名前" style="background: #222; border: 1px solid #444; color: white; padding: 10px; width: 85px;">
+      <input id="room-input" type="text" placeholder="部屋名" style="background: #222; border: 1px solid #444; color: white; padding: 10px; width: 85px;">
+      <button id="join-btn" style="background: #2ecc71; color: white; padding: 10px 15px; border-radius: 5px; font-weight: bold;">参加</button>
       <button id="exit-btn" style="background: #ea4335; color: white; padding: 10px 15px; border-radius: 5px;">終了</button>
     </div>
     <div id="video-grid" style="flex: 1; background: #000; display: flex; gap: 10px; padding: 10px; overflow-x: auto; align-items: center; justify-content: center;">
@@ -84,11 +73,13 @@ const videoGrid = document.querySelector<HTMLDivElement>('#video-grid')!;
 const statusBadge = document.querySelector<HTMLDivElement>('#status-badge')!;
 const needleFrame = document.querySelector<HTMLIFrameElement>('#needle-frame')!;
 const needleGuard = document.querySelector<HTMLDivElement>('#needle-guard')!;
+const chatBox = document.querySelector<HTMLDivElement>('#chat-box')!;
 
 let localStream: MediaStream;
+let screenStream: MediaStream | null = null;
 let peer: Peer | null = null;
 let myName = "ゲスト";
-let isAvatarActive = false; // アバター状態の変数
+let isAvatarActive = false;
 const connectedPeers = new Set<string>();
 const dataConnections = new Map<string, DataConnection>();
 
@@ -110,14 +101,17 @@ async function init() {
 // --- 5. 通信ロジック ---
 function tryNextSeat(roomKey: string, seat: number) {
   if (peer) { peer.destroy(); peer = null; }
+  // 他の人と繋がるためのID生成 (ここを以前の形式に合わせました)
   peer = new Peer(`${roomKey}-${seat}`);
-  peer.on('open', () => {
-    statusBadge.innerText = `席${seat}で参加中`;
+
+  peer.on('open', (id) => {
+    statusBadge.innerText = `席${seat}で接続中`;
     setTimeout(() => {
-      for (let i = 1; i < seat; i++) {
+      for (let i = 1; i <= 5; i++) { // 最大5席分を探しに行く
+        if (i === seat) continue;
         const targetId = `${roomKey}-${i}`;
         if (!connectedPeers.has(targetId)) {
-          const call = peer!.call(targetId, localStream);
+          const call = peer!.call(targetId, screenStream || localStream);
           if (call) handleCall(call);
           const conn = peer!.connect(targetId);
           if (conn) handleDataConnection(conn);
@@ -125,8 +119,9 @@ function tryNextSeat(roomKey: string, seat: number) {
       }
     }, 1000);
   });
-  peer.on('call', (call) => { call.answer(localStream); handleCall(call); });
+  peer.on('call', (call) => { call.answer(screenStream || localStream); handleCall(call); });
   peer.on('connection', (conn) => handleDataConnection(conn));
+  peer.on('error', (err) => { if (err.type === 'unavailable-id') tryNextSeat(roomKey, seat + 1); });
 }
 
 function handleCall(call: MediaConnection) {
@@ -137,16 +132,12 @@ function handleCall(call: MediaConnection) {
     const container = document.createElement('div');
     container.id = `container-${call.peer}`;
     container.className = "video-container";
-    
     const v = document.createElement('video');
     v.srcObject = stream; v.autoplay = true; v.playsInline = true;
     v.style.cssText = "height: 100%; width: 100%; object-fit: cover;";
-    
-    // 相手用アバター画像（変数を元に表示を切り替える場所）
     const avatarImg = document.createElement('img');
     avatarImg.src = "https://raw.githubusercontent.com/Tarikul-Islam-Anik/Animated-Fluent-Emojis/master/Emojis/Animals/Raccoon.png";
     avatarImg.className = "remote-avatar";
-    
     container.appendChild(v);
     container.appendChild(avatarImg);
     videoGrid.appendChild(container);
@@ -158,7 +149,6 @@ function handleCall(call: MediaConnection) {
 function handleDataConnection(conn: DataConnection) {
   dataConnections.set(conn.peer, conn);
   conn.on('data', (data: any) => {
-    // 変数(type)を受け取って、相手の表示を切り替える
     const container = document.getElementById(`container-${conn.peer}`);
     if (data.type === 'AVATAR_STATE') {
       if (data.active) container?.classList.add('avatar-active');
@@ -169,19 +159,32 @@ function handleDataConnection(conn: DataConnection) {
 }
 
 // --- 6. イベント設定 ---
+document.querySelector('#share-btn')?.addEventListener('click', async (e) => {
+  if (!screenStream) {
+    try {
+      screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      bigVideo.srcObject = screenStream;
+      (e.currentTarget as HTMLElement).classList.add('active');
+      // 既存の通話を更新
+      dataConnections.forEach((_, peerId) => {
+         peer?.call(peerId, screenStream!);
+      });
+    } catch (err) { console.error(err); }
+  } else {
+    screenStream.getTracks().forEach(t => t.stop());
+    screenStream = null;
+    bigVideo.srcObject = localStream;
+    (e.currentTarget as HTMLElement).classList.remove('active');
+  }
+});
+
 document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
-  isAvatarActive = !isAvatarActive; // 変数を反転
-  const isOff = !isAvatarActive;
-  
+  isAvatarActive = !isAvatarActive;
   needleFrame.style.display = isAvatarActive ? 'block' : 'none';
   needleGuard.style.display = isAvatarActive ? 'block' : 'none';
   bigVideo.style.opacity = isAvatarActive ? '0' : '1';
   (e.currentTarget as HTMLElement).classList.toggle('active', isAvatarActive);
-
-  // 全員に「今アバターだよ（じゃないよ）」という変数を送る
-  dataConnections.forEach(conn => {
-    conn.send({ type: 'AVATAR_STATE', active: isAvatarActive });
-  });
+  dataConnections.forEach(conn => conn.send({ type: 'AVATAR_STATE', active: isAvatarActive }));
 });
 
 document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
@@ -194,18 +197,25 @@ document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
   (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
 });
 
+document.querySelector('#chat-toggle-btn')?.addEventListener('click', () => {
+  chatBox.style.display = chatBox.style.display === 'none' ? 'flex' : 'none';
+});
+
 document.querySelector('#join-btn')?.addEventListener('click', () => {
   const room = (document.querySelector('#room-input') as HTMLInputElement).value.trim();
   myName = (document.querySelector('#name-input') as HTMLInputElement).value.trim() || "名無し";
   if (!room) return alert("部屋名を入れてね");
   SettingsManager.setUserName(myName);
   SettingsManager.setLastRoomName(room);
-  tryNextSeat(`vFINAL-${room}`, 1);
+  videoGrid.querySelectorAll('.video-container:not(#local-container)').forEach(v => v.remove());
+  connectedPeers.clear();
+  tryNextSeat(`room-${room}`, 1); // 合言葉の形式を安定版に修正
 });
+
+document.querySelector('#exit-btn')?.addEventListener('click', () => location.reload());
 
 function appendMessage(sender: string, text: string) {
   const div = document.createElement('div');
-  div.className = "chat-msg";
   div.innerText = `${sender}: ${text}`;
   document.querySelector('#chat-messages')?.appendChild(div);
 }
