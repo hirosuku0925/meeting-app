@@ -18,20 +18,28 @@ globalStyle.textContent = `
   .chat-msg { margin-bottom: 5px; word-break: break-all; }
   .chat-msg.me { color: #4facfe; }
   
-  #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; }
-  
-  /* 透明なガードパネル：メニューを触らせないための透明な壁 */
+  /* 画面全体のガードパネル（透明な壁） */
   #needle-guard { 
     position: absolute; 
-    bottom: 0; 
-    left: 0; 
-    width: 100%; 
-    height: 65px; /* 下のバーを覆う高さ */
+    top: 0; left: 0; width: 100%; height: 100%; 
     background: transparent; 
     display: none; 
     z-index: 6; 
   }
 
+  /* カメラOFF時の名前表示用 */
+  .name-label {
+    position: absolute;
+    top: 50%; left: 50%; transform: translate(-50%, -50%);
+    font-size: 24px; font-weight: bold; color: white;
+    display: none; z-index: 2; text-shadow: 0 0 10px rgba(0,0,0,0.8);
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  .camera-off .name-label { display: block; }
+  .camera-off video { opacity: 0; }
+
+  #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; }
   .video-container { position: relative; height: 100%; min-width: 180px; background: #222; border-radius: 8px; overflow: hidden; cursor: pointer; border: 1px solid #333; }
 `;
 document.head.appendChild(globalStyle);
@@ -43,7 +51,9 @@ app.innerHTML = `
     <div id="main-display" style="height: 60vh; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
       <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain;"></video>
       <iframe id="needle-frame" src="https://engine.needle.tools/samples-uploads/facefilter/?" allow="camera; microphone; fullscreen"></iframe>
-      <div id="needle-guard"></div> <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 10;">準備中...</div>
+      <div id="needle-guard"></div> 
+      <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 10;">準備中...</div>
+      
       <div id="chat-box" style="display:none; position: absolute; right: 10px; top: 10px; bottom: 10px; width: 220px; background: rgba(30,30,30,0.9); border-radius: 8px; flex-direction: column; border: 1px solid #444; z-index: 100;">
         <div style="padding: 8px; border-bottom: 1px solid #444; font-size: 12px; font-weight: bold;">チャット</div>
         <div id="chat-messages" style="flex: 1; overflow-y: auto; padding: 10px; font-size: 11px;"></div>
@@ -53,6 +63,7 @@ app.innerHTML = `
         </div>
       </div>
     </div>
+
     <div id="toolbar" style="height: 100px; background: #111; display: flex; align-items: center; justify-content: center; gap: 12px; border-top: 1px solid #333; flex-shrink: 0; padding: 0 10px;">
       <div class="ctrl-group"><button id="mic-btn" class="tool-btn">🎤</button><span>マイク</span></div>
       <div class="ctrl-group"><button id="cam-btn" class="tool-btn">📹</button><span>カメラ</span></div>
@@ -66,8 +77,12 @@ app.innerHTML = `
       <button id="join-btn" style="background: #2ecc71; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-weight: bold;">参加</button>
       <button id="exit-btn" style="background: #ea4335; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer;">終了</button>
     </div>
+
     <div id="video-grid" style="flex: 1; background: #000; display: flex; gap: 10px; padding: 10px; overflow-x: auto; align-items: center; justify-content: center;">
-      <video id="local-video" autoplay playsinline muted style="height: 100%; border-radius: 8px; border: 2px solid #4facfe; object-fit: cover;"></video>
+      <div id="local-container" class="video-container">
+        <video id="local-video" autoplay playsinline muted style="height: 100%; width: 100%; object-fit: cover;"></video>
+        <div id="local-name-label" class="name-label"></div>
+      </div>
     </div>
   </div>
 `;
@@ -106,12 +121,12 @@ async function init() {
   } catch (e) { statusBadge.innerText = "カメラを許可してください"; }
 }
 
-// --- 5. 接続ロジック ---
+// --- 5. 接続・通信ロジック（PeerJS） ---
 function tryNextSeat(roomKey: string, seat: number) {
   if (peer) { peer.destroy(); peer = null; }
   peer = new Peer(`${roomKey}-${seat}`);
 
-  peer.on('open', (id) => {
+  peer.on('open', () => {
     statusBadge.innerText = `席${seat}で接続中...`;
     setTimeout(() => {
       if (!peer) return;
@@ -126,7 +141,6 @@ function tryNextSeat(roomKey: string, seat: number) {
       }
     }, 1000);
   });
-
   peer.on('call', (call) => {
     call.answer(screenStream || localStream);
     handleCall(call);
@@ -163,18 +177,58 @@ function handleDataConnection(conn: DataConnection) {
 }
 
 // --- 6. イベント設定 ---
+
+// 参加ボタン
 document.querySelector('#join-btn')?.addEventListener('click', () => {
   const room = (document.querySelector('#room-input') as HTMLInputElement).value.trim();
   myName = (document.querySelector('#name-input') as HTMLInputElement).value.trim() || "名無し";
   if (!room) return alert("部屋名を入れてね");
   SettingsManager.setUserName(myName);
   SettingsManager.setLastRoomName(room);
-  videoGrid.querySelectorAll('.video-container').forEach(v => v.remove());
+  videoGrid.querySelectorAll('.video-container:not(#local-container)').forEach(v => v.remove());
   connectedPeers.clear();
   tryNextSeat(`vFINAL-${room}`, 1);
 });
 
+// 終了ボタン
 document.querySelector('#exit-btn')?.addEventListener('click', () => location.reload());
+
+// カメラボタン（名前表示連動）
+document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
+  const track = localStream.getVideoTracks()[0];
+  track.enabled = !track.enabled;
+  
+  const container = document.querySelector('#local-container')!;
+  const label = document.querySelector('#local-name-label')!;
+  
+  if (!track.enabled) {
+    container.classList.add('camera-off');
+    label.textContent = myName;
+  } else {
+    container.classList.remove('camera-off');
+  }
+  (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
+});
+
+// アバターボタン（全体ガード連動）
+document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
+  const isOff = needleFrame.style.display === 'none' || needleFrame.style.display === '';
+  
+  needleFrame.style.display = isOff ? 'block' : 'none';
+  needleGuard.style.display = isOff ? 'block' : 'none'; // ガードパネルを出す
+  
+  bigVideo.style.opacity = isOff ? '0' : '1';
+  (e.currentTarget as HTMLElement).classList.toggle('active', isOff);
+});
+
+// チャット送信
+document.querySelector('#chat-send-btn')?.addEventListener('click', () => {
+  const input = document.querySelector<HTMLInputElement>('#chat-input')!;
+  if (!input.value.trim()) return;
+  dataConnections.forEach(conn => conn.send({ name: myName, message: input.value }));
+  appendMessage("自分", input.value, true);
+  input.value = "";
+});
 
 function appendMessage(sender: string, text: string, isMe = false) {
   const div = document.createElement('div');
@@ -184,27 +238,8 @@ function appendMessage(sender: string, text: string, isMe = false) {
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-document.querySelector('#chat-send-btn')?.addEventListener('click', () => {
-  const input = document.querySelector<HTMLInputElement>('#chat-input')!;
-  if (!input.value.trim()) return;
-  dataConnections.forEach(conn => conn.send({ name: myName, message: input.value }));
-  appendMessage("自分", input.value, true);
-  input.value = "";
-});
-
 document.querySelector('#chat-toggle-btn')?.addEventListener('click', () => {
   chatBox.style.display = chatBox.style.display === 'none' ? 'flex' : 'none';
-});
-
-// アバターボタン：フレームと透明ガードを同時にON/OFF
-document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
-  const isOff = needleFrame.style.display === 'none' || needleFrame.style.display === '';
-  
-  needleFrame.style.display = isOff ? 'block' : 'none';
-  needleGuard.style.display = isOff ? 'block' : 'none'; // ガードパネル連動
-  
-  bigVideo.style.opacity = isOff ? '0' : '1';
-  (e.currentTarget as HTMLElement).classList.toggle('active', isOff);
 });
 
 init();
