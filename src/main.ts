@@ -1,234 +1,424 @@
-import './style.css'
-import { Peer, type MediaConnection, type DataConnection } from 'peerjs'
-import { setupVoiceChangerButtonHandler } from './voice-changer-dialog'
-import { setupFaceAvatarButtonHandler } from './face-image-avatar-dialog'
-import SettingsManager from './settings-manager'
+/**
+ * 美顔フィルター設定ダイアログ
+ */
 
-// --- 1. スタイル設定 ---
-const globalStyle = document.createElement('style');
-globalStyle.textContent = `
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body, html { width: 100%; height: 100%; overflow: hidden; background: #000; color: white; font-family: sans-serif; }
-  .tool-btn { background: #333; border: none; color: white; font-size: 18px; width: 45px; height: 45px; border-radius: 50%; cursor: pointer; transition: 0.2s; display: flex; align-items: center; justify-content: center; }
-  .tool-btn:hover { background: #444; transform: scale(1.1); }
-  .ctrl-group { display: flex; flex-direction: column; align-items: center; font-size: 10px; color: #888; gap: 4px; }
-  .off { background: #ea4335 !important; }
-  .active { background: #4facfe !important; }
-  .name-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; font-weight: bold; color: white; display: none; z-index: 2; text-shadow: 0 0 10px rgba(0,0,0,0.8); pointer-events: none; }
-  .camera-off .name-label { display: block; }
-  .camera-off video { opacity: 0; }
-  #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; }
-  #needle-guard { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: transparent; display: none; z-index: 6; }
-  .video-container { position: relative; height: 100%; min-width: 180px; background: #222; border-radius: 8px; overflow: hidden; border: 1px solid #333; }
-`;
-document.head.appendChild(globalStyle);
+import beautyFilterManager, { BeautySettings } from './beauty-filter-manager';
 
-// --- 2. HTML構造 ---
-const app = document.querySelector<HTMLDivElement>('#app')!;
-app.innerHTML = `
-  <div style="display: flex; height: 100vh; width: 100%; flex-direction: column;">
-    <div id="main-display" style="height: 60vh; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
-      <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain;"></video>
-      <iframe id="needle-frame" src="https://engine.needle.tools/samples-uploads/facefilter/?" allow="camera; microphone; fullscreen"></iframe>
-      <div id="needle-guard"></div> 
-      <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 10;">準備中...</div>
-      <div id="chat-box" style="display:none; position: absolute; right: 10px; top: 10px; bottom: 10px; width: 220px; background: rgba(30,30,30,0.9); border-radius: 8px; flex-direction: column; border: 1px solid #444; z-index: 100;">
-        <div id="chat-messages" style="flex: 1; overflow-y: auto; padding: 10px; font-size: 11px;"></div>
-        <div style="padding: 8px; display: flex; gap: 5px;">
-          <input id="chat-input" type="text" placeholder="メッセージ..." style="flex: 1; background: #222; border: 1px solid #555; color: white; padding: 5px; font-size: 11px;">
-          <button id="chat-send-btn" style="background: #4facfe; border: none; color: white; padding: 5px; border-radius: 4px;">送信</button>
-        </div>
-      </div>
-    </div>
-    <div id="toolbar" style="height: 100px; background: #111; display: flex; align-items: center; justify-content: center; gap: 12px;">
-      <div class="ctrl-group"><button id="mic-btn" class="tool-btn">🎤</button><span>マイク</span></div>
-      <div class="ctrl-group"><button id="cam-btn" class="tool-btn">📹</button><span>カメラ</span></div>
-      <div class="ctrl-group"><button id="chat-toggle-btn" class="tool-btn">💬</button><span>チャット</span></div>
-      <div class="ctrl-group"><button id="avatar-btn" class="tool-btn">🎭</button><span>アバター</span></div>
-      <input id="name-input" type="text" placeholder="名前" style="background: #222; border: 1px solid #444; color: white; padding: 10px; width: 85px;">
-      <input id="room-input" type="text" placeholder="部屋名" style="background: #222; border: 1px solid #444; color: white; padding: 10px; width: 85px;">
-      <button id="join-btn" style="background: #2ecc71; color: white; padding: 10px 15px; border-radius: 5px; font-weight: bold;">参加</button>
-      <button id="exit-btn" style="background: #ea4335; color: white; padding: 10px 15px; border-radius: 5px;">終了</button>
-    </div>
-    <div id="video-grid" style="flex: 1; background: #000; display: flex; gap: 10px; padding: 10px; overflow-x: auto;">
-      <div id="local-container" class="video-container">
-        <video id="local-video" autoplay playsinline muted style="height: 100%; width: 100%; object-fit: cover;"></video>
-        <div id="local-name-label" class="name-label"></div>
-      </div>
-    </div>
-  </div>
-`;
+export function createBeautyFilterDialog(): HTMLDivElement {
+  const dialog = document.createElement('div');
+  dialog.id = 'beauty-filter-dialog';
+  dialog.style.cssText = `
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+    border: 2px solid #ff69b4;
+    border-radius: 12px;
+    padding: 20px;
+    z-index: 10000;
+    width: 90%;
+    max-width: 420px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    font-family: sans-serif;
+    color: white;
+    max-height: 80vh;
+    overflow-y: auto;
+  `;
 
-// --- 3. 変数管理 ---
-const bigVideo = document.querySelector<HTMLVideoElement>('#big-video')!;
-const localVideo = document.querySelector<HTMLVideoElement>('#local-video')!;
-const videoGrid = document.querySelector<HTMLDivElement>('#video-grid')!;
-const statusBadge = document.querySelector<HTMLDivElement>('#status-badge')!;
-const needleFrame = document.querySelector<HTMLIFrameElement>('#needle-frame')!;
-const needleGuard = document.querySelector<HTMLDivElement>('#needle-guard')!;
-const chatBox = document.querySelector<HTMLDivElement>('#chat-box')!;
-const chatMessages = document.querySelector<HTMLDivElement>('#chat-messages')!;
+  const title = document.createElement('h2');
+  title.textContent = '✨ 美顔フィルター & メイク';
+  title.style.cssText = 'margin: 0 0 20px 0; font-size: 20px; text-align: center; color: #ff69b4;';
 
-let localStream: MediaStream;
-let peer: Peer | null = null;
-let myName = "ゲスト";
-let isAvatarActive = false;
-const calls = new Map<string, MediaConnection>();
-const dataConns = new Map<string, DataConnection>();
+  // 有効化トグル
+  const enableSection = document.createElement('div');
+  enableSection.style.cssText = 'margin-bottom: 20px; display: flex; align-items: center; gap: 10px;';
 
-// --- 4. 映像切り替え ---
-async function changeVideoTrack(newStream: MediaStream) {
-  const newTrack = newStream.getVideoTracks()[0];
-  calls.forEach(call => {
-    const sender = call.peerConnection.getSenders().find(s => s.track?.kind === 'video');
-    if (sender) sender.replaceTrack(newTrack);
-  });
-}
+  const enableToggle = document.createElement('input');
+  enableToggle.type = 'checkbox';
+  enableToggle.id = 'beauty-filter-enable';
+  enableToggle.style.cssText = 'width: 20px; height: 20px; cursor: pointer;';
+  enableToggle.checked = false;
 
-// アバター映像を取得する関数（共通化）
-function getAvatarStream(): MediaStream | null {
-  const canvas = needleFrame.contentWindow?.document.querySelector('canvas');
-  if (canvas) {
-    return (canvas as any).captureStream(30);
-  }
-  return null;
-}
+  const enableLabel = document.createElement('label');
+  enableLabel.htmlFor = 'beauty-filter-enable';
+  enableLabel.textContent = '美顔フィルターを有効にする';
+  enableLabel.style.cssText = 'cursor: pointer; font-weight: bold;';
 
-async function init() {
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    localVideo.srcObject = localStream;
-    bigVideo.srcObject = localStream;
-    statusBadge.innerText = "準備完了";
-    setupFaceAvatarButtonHandler('avatar-btn');
-    setupVoiceChangerButtonHandler();
-  } catch(e) { statusBadge.innerText = "カメラを許可してね"; }
-}
+  enableSection.appendChild(enableToggle);
+  enableSection.appendChild(enableLabel);
 
-function joinRoom(roomKey: string, seat: number) {
-  if (peer) { peer.destroy(); peer = null; calls.clear(); dataConns.clear(); }
-  peer = new Peer(`${roomKey}-${seat}`);
+  // フィルター設定セクション
+  const filterSection = document.createElement('div');
+  filterSection.style.cssText = `
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 20px;
+  `;
 
-  peer.on('open', (id) => {
-    statusBadge.innerText = `参加中: ${id}`;
-    for (let i = 1; i <= 5; i++) {
-      if (i === seat) continue;
-      const targetId = `${roomKey}-${i}`;
-      const call = peer!.call(targetId, localStream);
-      if (call) handleCall(call);
-      const conn = peer!.connect(targetId);
-      if (conn) handleDataConnection(conn);
+  const filterTitle = document.createElement('h3');
+  filterTitle.textContent = 'フィルター設定';
+  filterTitle.style.cssText = 'margin: 0 0 15px 0; font-size: 14px; color: #ffb6c1;';
+
+  const smoothingSection = createSliderControl(
+    'smoothing',
+    '肌の滑らかさ',
+    0,
+    1,
+    0.3,
+    0.05,
+    (value) => `${(value * 100).toFixed(0)}%`
+  );
+
+  const brightnessSection = createSliderControl(
+    'brightness',
+    '明るさ',
+    -50,
+    50,
+    10,
+    5,
+    (value) => `${value > 0 ? '+' : ''}${value}`
+  );
+
+  const contrastSection = createSliderControl(
+    'contrast',
+    'コントラスト',
+    -50,
+    50,
+    5,
+    5,
+    (value) => `${value > 0 ? '+' : ''}${value}`
+  );
+
+  const whiteningSection = createSliderControl(
+    'whiteningEffect',
+    '美白効果',
+    0,
+    1,
+    0.2,
+    0.05,
+    (value) => `${(value * 100).toFixed(0)}%`
+  );
+
+  filterSection.appendChild(filterTitle);
+  filterSection.appendChild(smoothingSection);
+  filterSection.appendChild(brightnessSection);
+  filterSection.appendChild(contrastSection);
+  filterSection.appendChild(whiteningSection);
+
+  // メイク設定セクション
+  const makeupSection = document.createElement('div');
+  makeupSection.style.cssText = `
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 20px;
+  `;
+
+  const makeupTitle = document.createElement('h3');
+  makeupTitle.textContent = 'メイク';
+  makeupTitle.style.cssText = 'margin: 0 0 15px 0; font-size: 14px; color: #ffb6c1;';
+
+  // リップスティック
+  const lipstickToggleSection = createToggleControl('lipstick', 'リップスティック 💋');
+  const lipstickColorSection = createColorControl('lipstickColor', 'リップの色');
+
+  // アイシャドウ
+  const eyeshadowToggleSection = createToggleControl('eyeshadow', 'アイシャドウ ✨');
+  const eyeshadowColorSection = createColorControl('eyeshadowColor', 'アイシャドウの色');
+
+  // チーク
+  const blushToggleSection = createToggleControl('blush', 'チーク 🌸');
+  const blushColorSection = createColorControl('blushColor', 'チークの色');
+
+  makeupSection.appendChild(makeupTitle);
+  makeupSection.appendChild(lipstickToggleSection);
+  makeupSection.appendChild(lipstickColorSection);
+  makeupSection.appendChild(eyeshadowToggleSection);
+  makeupSection.appendChild(eyeshadowColorSection);
+  makeupSection.appendChild(blushToggleSection);
+  makeupSection.appendChild(blushColorSection);
+
+  // プリセットボタン
+  const presetsSection = document.createElement('div');
+  presetsSection.style.cssText = 'margin-top: 15px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;';
+
+  const presets = [
+    {
+      name: 'ナチュラル',
+      settings: {
+        smoothing: 0.3,
+        brightness: 10,
+        contrast: 5,
+        whiteningEffect: 0.1,
+        lipstick: false,
+        eyeshadow: false,
+        blush: false
+      }
+    },
+    {
+      name: 'グラマラス',
+      settings: {
+        smoothing: 0.6,
+        brightness: 20,
+        contrast: 15,
+        whiteningEffect: 0.4,
+        lipstick: true,
+        eyeshadow: true,
+        blush: true
+      }
     }
+  ];
+
+  presets.forEach((preset) => {
+    const btn = document.createElement('button');
+    btn.textContent = preset.name;
+    btn.style.cssText = `
+      background: #ff69b4;
+      border: none;
+      color: white;
+      padding: 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: bold;
+      transition: 0.2s;
+    `;
+    btn.onmouseover = () => (btn.style.background = '#ff85c1');
+    btn.onmouseout = () => (btn.style.background = '#ff69b4');
+    btn.onclick = () => {
+      applyPreset(preset.settings);
+      updateAllControls();
+    };
+    presetsSection.appendChild(btn);
   });
 
-  peer.on('call', (call) => {
-    call.answer(localStream);
-    handleCall(call);
+  // 閉じるボタン
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = `
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: #ea4335;
+    border: none;
+    color: white;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 18px;
+  `;
+  closeBtn.onclick = () => dialog.remove();
+
+  // コンテナに追加
+  dialog.appendChild(title);
+  dialog.appendChild(enableSection);
+  dialog.appendChild(filterSection);
+  dialog.appendChild(makeupSection);
+  dialog.appendChild(presetsSection);
+  dialog.appendChild(closeBtn);
+
+  // イベントハンドラー
+  enableToggle.addEventListener('change', () => {
+    if (enableToggle.checked) {
+      beautyFilterManager.updateSettings({ enabled: true });
+    } else {
+      beautyFilterManager.updateSettings({ enabled: false });
+    }
+    updateAllControls();
   });
-  peer.on('connection', (conn) => handleDataConnection(conn));
-  peer.on('error', (err) => { if (err.type === 'unavailable-id') joinRoom(roomKey, seat + 1); });
-}
 
-function handleCall(call: MediaConnection) {
-  calls.set(call.peer, call);
+  // スライダー変更イベント
+  dialog.addEventListener('input', (e: Event) => {
+    const target = e.target as HTMLInputElement;
+    if (target.type === 'range') {
+      const value = parseFloat(target.value);
+      const settingKey = target.dataset.setting as keyof BeautySettings;
 
-  // 【追加：重要】繋がった瞬間にアバター中なら映像を差し替える
-  call.on('open', () => {
-    if (isAvatarActive) {
-      const avatarStream = getAvatarStream();
-      if (avatarStream) {
-        const sender = call.peerConnection.getSenders().find(s => s.track?.kind === 'video');
-        if (sender) sender.replaceTrack(avatarStream.getVideoTracks()[0]);
+      if (settingKey) {
+        beautyFilterManager.updateSettings({
+          [settingKey]: value
+        });
+      }
+
+      const label = target.parentElement?.querySelector('.slider-value');
+      if (label && target.dataset.format) {
+        const formatter = new Function('value', `return \`${target.dataset.format}\``);
+        label.textContent = (formatter as any)(value);
+      }
+    }
+
+    // トグル変更イベント
+    if (target.type === 'checkbox' && target.id !== 'beauty-filter-enable') {
+      const settingKey = target.dataset.setting as keyof BeautySettings;
+      if (settingKey) {
+        beautyFilterManager.updateSettings({
+          [settingKey]: target.checked
+        });
+      }
+    }
+
+    // カラーピッカー変更イベント
+    if (target.type === 'color') {
+      const settingKey = target.dataset.setting as keyof BeautySettings;
+      if (settingKey) {
+        beautyFilterManager.updateSettings({
+          [settingKey]: target.value
+        });
       }
     }
   });
 
-  call.on('stream', (stream) => {
-    if (document.getElementById(`container-${call.peer}`)) return;
-    const container = document.createElement('div');
-    container.id = `container-${call.peer}`;
-    container.className = "video-container";
-    const v = document.createElement('video');
-    v.srcObject = stream; v.autoplay = true; v.playsInline = true;
-    v.style.cssText = "height: 100%; width: 100%; object-fit: cover;";
-    container.appendChild(v);
-    videoGrid.appendChild(container);
-    container.onclick = () => { bigVideo.srcObject = stream; };
-  });
-  call.on('close', () => { document.getElementById(`container-${call.peer}`)?.remove(); calls.delete(call.peer); });
-}
+  // 初期値を反映
+  updateAllControls();
 
-function handleDataConnection(conn: DataConnection) {
-  dataConns.set(conn.peer, conn);
-  conn.on('data', (data: any) => {
-    if (data.type === 'chat') appendMessage(data.name, data.message);
-  });
-}
+  function updateAllControls() {
+    const settings = beautyFilterManager.getSettings();
+    enableToggle.checked = settings.enabled;
 
-// --- 5. ボタンイベント ---
-document.querySelector('#mic-btn')?.addEventListener('click', (e) => {
-  const track = localStream.getAudioTracks()[0];
-  track.enabled = !track.enabled;
-  (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
-});
+    const sliders = dialog.querySelectorAll('input[type="range"]') as NodeListOf<HTMLInputElement>;
+    sliders.forEach((slider) => {
+      const key = slider.dataset.setting as keyof BeautySettings;
+      if (key && key in settings) {
+        slider.value = String(settings[key]);
+        const label = slider.parentElement?.querySelector('.slider-value');
+        if (label && slider.dataset.format) {
+          const formatter = new Function('value', `return \`${slider.dataset.format}\``);
+          label.textContent = (formatter as any)(settings[key]);
+        }
+      }
+    });
 
-document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
-  const track = localStream.getVideoTracks()[0];
-  track.enabled = !track.enabled;
-  const container = document.querySelector('#local-container')!;
-  if (!track.enabled) { 
-    container.classList.add('camera-off'); 
-    (document.querySelector('#local-name-label') as HTMLElement).textContent = myName; 
-  } else { 
-    container.classList.remove('camera-off'); 
+    const toggles = dialog.querySelectorAll('input[type="checkbox"]:not(#beauty-filter-enable)') as NodeListOf<HTMLInputElement>;
+    toggles.forEach((toggle) => {
+      const key = toggle.dataset.setting as keyof BeautySettings;
+      if (key && key in settings) {
+        toggle.checked = settings[key] as boolean;
+      }
+    });
+
+    const colors = dialog.querySelectorAll('input[type="color"]') as NodeListOf<HTMLInputElement>;
+    colors.forEach((color) => {
+      const key = color.dataset.setting as keyof BeautySettings;
+      if (key && key in settings) {
+        color.value = settings[key] as string;
+      }
+    });
   }
-  (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
-});
 
-document.querySelector('#chat-toggle-btn')?.addEventListener('click', () => {
-  chatBox.style.display = chatBox.style.display === 'none' ? 'flex' : 'none';
-});
+  function applyPreset(preset: Partial<BeautySettings>) {
+    beautyFilterManager.updateSettings(preset);
+  }
 
-document.querySelector('#chat-send-btn')?.addEventListener('click', () => {
-  const input = document.querySelector<HTMLInputElement>('#chat-input')!;
-  if (!input.value.trim()) return;
-  const msg = { type: 'chat', name: myName, message: input.value };
-  dataConns.forEach(c => c.send(msg));
-  appendMessage("自分", input.value, true);
-  input.value = "";
-});
+  return dialog;
+}
 
-// アバターボタンの処理（ここも確実に同期するように強化）
-document.querySelector('#avatar-btn')?.addEventListener('click', () => {
-  isAvatarActive = !isAvatarActive;
-  needleFrame.style.display = isAvatarActive ? 'block' : 'none';
-  needleGuard.style.display = isAvatarActive ? 'block' : 'none';
-  bigVideo.style.opacity = isAvatarActive ? '0' : '1';
-  (document.querySelector('#avatar-btn') as HTMLElement).classList.toggle('active', isAvatarActive);
+function createSliderControl(
+  settingKey: string,
+  label: string,
+  min: number,
+  max: number,
+  defaultValue: number,
+  step: number,
+  formatValue: (value: number) => string
+): HTMLDivElement {
+  const section = document.createElement('div');
+  section.style.cssText = 'margin-bottom: 12px;';
 
-  if (isAvatarActive) {
-    const avatarStream = getAvatarStream();
-    if (avatarStream) {
-      changeVideoTrack(avatarStream);
+  const labelEl = document.createElement('label');
+  labelEl.textContent = label;
+  labelEl.style.cssText = 'display: block; margin-bottom: 5px; font-size: 12px; font-weight: bold;';
+
+  const controlContainer = document.createElement('div');
+  controlContainer.style.cssText = 'display: flex; gap: 10px; align-items: center;';
+
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = String(min);
+  slider.max = String(max);
+  slider.step = String(step);
+  slider.value = String(defaultValue);
+  slider.dataset.setting = settingKey;
+  slider.dataset.format = formatValue(defaultValue).replace(/`/g, '\\`');
+  slider.style.cssText = 'flex: 1; height: 6px; background: linear-gradient(to right, #ffb6c1, #ff69b4); border-radius: 3px; outline: none; cursor: pointer;';
+
+  const valueLabel = document.createElement('span');
+  valueLabel.className = 'slider-value';
+  valueLabel.textContent = formatValue(defaultValue);
+  valueLabel.style.cssText = 'min-width: 60px; text-align: right; font-size: 12px; color: #ffb6c1;';
+
+  controlContainer.appendChild(slider);
+  controlContainer.appendChild(valueLabel);
+
+  section.appendChild(labelEl);
+  section.appendChild(controlContainer);
+
+  return section;
+}
+
+function createToggleControl(settingKey: string, label: string): HTMLDivElement {
+  const section = document.createElement('div');
+  section.style.cssText = 'margin-bottom: 10px; display: flex; align-items: center; gap: 8px;';
+
+  const toggle = document.createElement('input');
+  toggle.type = 'checkbox';
+  toggle.id = `beauty-${settingKey}`;
+  toggle.dataset.setting = settingKey;
+  toggle.style.cssText = 'width: 18px; height: 18px; cursor: pointer;';
+  toggle.checked = false;
+
+  const labelEl = document.createElement('label');
+  labelEl.htmlFor = `beauty-${settingKey}`;
+  labelEl.textContent = label;
+  labelEl.style.cssText = 'cursor: pointer; font-size: 12px; flex: 1;';
+
+  section.appendChild(toggle);
+  section.appendChild(labelEl);
+
+  return section;
+}
+
+function createColorControl(settingKey: string, label: string): HTMLDivElement {
+  const section = document.createElement('div');
+  section.style.cssText = 'margin-left: 30px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;';
+
+  const labelEl = document.createElement('label');
+  labelEl.textContent = label;
+  labelEl.style.cssText = 'font-size: 11px; width: 80px;';
+
+  const colorPicker = document.createElement('input');
+  colorPicker.type = 'color';
+  colorPicker.id = `beauty-color-${settingKey}`;
+  colorPicker.dataset.setting = settingKey;
+  colorPicker.value = '#ff69b4';
+  colorPicker.style.cssText = 'width: 40px; height: 30px; border: none; border-radius: 4px; cursor: pointer;';
+
+  section.appendChild(labelEl);
+  section.appendChild(colorPicker);
+
+  return section;
+}
+
+export function setupBeautyFilterButtonHandler(buttonId: string = 'beauty-btn'): void {
+  const btn = document.getElementById(buttonId);
+  if (!btn) return;
+
+  btn.addEventListener('click', () => {
+    const existing = document.getElementById('beauty-filter-dialog');
+    if (existing) {
+      existing.remove();
+      return;
     }
-  } else {
-    changeVideoTrack(localStream);
-  }
-});
 
-document.querySelector('#join-btn')?.addEventListener('click', () => {
-  const room = (document.querySelector('#room-input') as HTMLInputElement).value.trim();
-  myName = (document.querySelector('#name-input') as HTMLInputElement).value.trim() || "ゲスト";
-  if (!room) return alert("部屋名を入れてね");
-  joinRoom(`room-${room}`, 1);
-});
+    const dialog = createBeautyFilterDialog();
+    document.body.appendChild(dialog);
 
-function appendMessage(sender: string, text: string, isMe = false) {
-  const div = document.createElement('div');
-  div.style.color = isMe ? "#4facfe" : "white";
-  div.innerText = `${sender}: ${text}`;
-  chatMessages.appendChild(div);
-  chatMessages.scrollTop = chatMessages.scrollHeight;
+    document.addEventListener('click', (e: MouseEvent) => {
+      if (e.target === dialog.parentElement) {
+        dialog.remove();
+      }
+    });
+  });
 }
-
-init();
