@@ -85,6 +85,15 @@ async function changeVideoTrack(newStream: MediaStream) {
   });
 }
 
+// アバター映像を取得する関数（共通化）
+function getAvatarStream(): MediaStream | null {
+  const canvas = needleFrame.contentWindow?.document.querySelector('canvas');
+  if (canvas) {
+    return (canvas as any).captureStream(30);
+  }
+  return null;
+}
+
 async function init() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -102,7 +111,6 @@ function joinRoom(roomKey: string, seat: number) {
 
   peer.on('open', (id) => {
     statusBadge.innerText = `参加中: ${id}`;
-    // 他の席(1~5)に自分から繋ぎにいく
     for (let i = 1; i <= 5; i++) {
       if (i === seat) continue;
       const targetId = `${roomKey}-${i}`;
@@ -113,13 +121,28 @@ function joinRoom(roomKey: string, seat: number) {
     }
   });
 
-  peer.on('call', (call) => { call.answer(localStream); handleCall(call); });
+  peer.on('call', (call) => {
+    call.answer(localStream);
+    handleCall(call);
+  });
   peer.on('connection', (conn) => handleDataConnection(conn));
   peer.on('error', (err) => { if (err.type === 'unavailable-id') joinRoom(roomKey, seat + 1); });
 }
 
 function handleCall(call: MediaConnection) {
   calls.set(call.peer, call);
+
+  // 【追加：重要】繋がった瞬間にアバター中なら映像を差し替える
+  call.on('open', () => {
+    if (isAvatarActive) {
+      const avatarStream = getAvatarStream();
+      if (avatarStream) {
+        const sender = call.peerConnection.getSenders().find(s => s.track?.kind === 'video');
+        if (sender) sender.replaceTrack(avatarStream.getVideoTracks()[0]);
+      }
+    }
+  });
+
   call.on('stream', (stream) => {
     if (document.getElementById(`container-${call.peer}`)) return;
     const container = document.createElement('div');
@@ -153,8 +176,12 @@ document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
   const track = localStream.getVideoTracks()[0];
   track.enabled = !track.enabled;
   const container = document.querySelector('#local-container')!;
-  if (!track.enabled) { container.classList.add('camera-off'); (document.querySelector('#local-name-label') as HTMLElement).textContent = myName; }
-  else { container.classList.remove('camera-off'); }
+  if (!track.enabled) { 
+    container.classList.add('camera-off'); 
+    (document.querySelector('#local-name-label') as HTMLElement).textContent = myName; 
+  } else { 
+    container.classList.remove('camera-off'); 
+  }
   (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
 });
 
@@ -171,6 +198,7 @@ document.querySelector('#chat-send-btn')?.addEventListener('click', () => {
   input.value = "";
 });
 
+// アバターボタンの処理（ここも確実に同期するように強化）
 document.querySelector('#avatar-btn')?.addEventListener('click', () => {
   isAvatarActive = !isAvatarActive;
   needleFrame.style.display = isAvatarActive ? 'block' : 'none';
@@ -179,10 +207,9 @@ document.querySelector('#avatar-btn')?.addEventListener('click', () => {
   (document.querySelector('#avatar-btn') as HTMLElement).classList.toggle('active', isAvatarActive);
 
   if (isAvatarActive) {
-    const canvas = needleFrame.contentWindow?.document.querySelector('canvas');
-    if (canvas) {
-      const stream = (canvas as any).captureStream(30);
-      changeVideoTrack(stream);
+    const avatarStream = getAvatarStream();
+    if (avatarStream) {
+      changeVideoTrack(avatarStream);
     }
   } else {
     changeVideoTrack(localStream);
