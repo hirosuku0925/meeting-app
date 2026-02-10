@@ -16,16 +16,15 @@ globalStyle.textContent = `
   .active { background: #4facfe !important; }
   .name-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 18px; font-weight: bold; color: white; display: none; z-index: 2; text-shadow: 0 0 10px rgba(0,0,0,0.8); pointer-events: none; text-align: center; width: 100%; }
   
-  /* カメラオフ時の表示制御 */
+  /* カメラオフ・アバター時の表示制御 */
   .camera-off .name-label { display: block; }
   .camera-off video { opacity: 0; }
-  
+  .avatar-on { border: 2px solid #4facfe !important; }
+  .avatar-on .name-label { display: block; color: #4facfe; font-size: 14px; top: 20px; transform: translate(-50%, 0); }
+
   #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; }
   #needle-guard { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: transparent; display: none; z-index: 6; }
   .video-container { position: relative; height: 100%; min-width: 180px; background: #222; border-radius: 8px; overflow: hidden; border: 1px solid #333; }
-  
-  .avatar-on { border: 2px solid #4facfe !important; }
-  .avatar-on .name-label { display: block; color: #4facfe; font-size: 14px; top: 20px; transform: translate(-50%, 0); }
 `;
 document.head.appendChild(globalStyle);
 
@@ -95,7 +94,6 @@ function getCurrentStream() {
 async function changeVideoTrack(newStream: MediaStream) {
   const newTrack = newStream.getVideoTracks()[0];
   localVideo.srcObject = newStream; 
-  
   calls.forEach(call => {
     const sender = call.peerConnection.getSenders().find(s => s.track?.kind === 'video');
     if (sender) sender.replaceTrack(newTrack);
@@ -122,20 +120,21 @@ function joinRoom(roomKey: string, seat: number) {
 
   peer.on('open', (id) => {
     statusBadge.innerText = `参加中: ${id}`;
-    // 最大90人対応のループ
+    // 最大90人対応
     for (let i = 1; i <= 90; i++) {
       const targetId = `${roomKey}-${i}`;
+      // ★分身防止：自分には絶対にかけない
       if (id === targetId) continue;
       
       const call = peer!.call(targetId, getCurrentStream());
       if (call) handleCall(call);
-      
       const conn = peer!.connect(targetId);
       if (conn) handleDataConnection(conn);
     }
   });
 
   peer.on('call', (call) => {
+    // ★分身防止：自分からの着信は拒絶
     if (call.peer === peer?.id) return;
     call.answer(getCurrentStream()); 
     handleCall(call);
@@ -147,9 +146,7 @@ function joinRoom(roomKey: string, seat: number) {
   });
 
   peer.on('error', (err) => {
-    if (err.type === 'unavailable-id') {
-      if (seat < 90) joinRoom(roomKey, seat + 1);
-    }
+    if (err.type === 'unavailable-id' && seat < 90) joinRoom(roomKey, seat + 1);
   });
 }
 
@@ -183,25 +180,24 @@ function handleDataConnection(conn: DataConnection) {
   conn.on('data', (data: any) => {
     const targetContainer = document.getElementById(`container-${conn.peer}`);
     if (!targetContainer) return;
+    const label = targetContainer.querySelector('.name-label') as HTMLElement;
 
     if (data.type === 'chat') {
       appendMessage(data.name, data.message);
     } 
-    // アバター同期
     else if (data.type === 'avatar-sync') {
       if (data.value === 1) {
         targetContainer.classList.add('avatar-on');
-        (targetContainer.querySelector('.name-label') as HTMLElement).innerText = data.name + " (アバター)";
+        if (label) label.innerText = `${data.name} (アバター)`;
       } else {
         targetContainer.classList.remove('avatar-on');
-        (targetContainer.querySelector('.name-label') as HTMLElement).innerText = "相手";
+        if (label) label.innerText = "相手";
       }
     }
-    // ★カメラオフ同期の受信
     else if (data.type === 'camera-sync') {
       if (data.enabled === false) {
         targetContainer.classList.add('camera-off');
-        (targetContainer.querySelector('.name-label') as HTMLElement).innerText = data.name;
+        if (label) label.innerText = data.name;
       } else {
         targetContainer.classList.remove('camera-off');
       }
@@ -217,7 +213,6 @@ document.querySelector('#mic-btn')?.addEventListener('click', (e) => {
   (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
 });
 
-// カメラオフの処理を強化
 document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
   const track = localStream.getVideoTracks()[0];
   track.enabled = !track.enabled;
@@ -231,22 +226,9 @@ document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
   }
   (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
 
-  // ★相手にカメラ状態を送る
+  // 相手にカメラ状態を同期
   const syncData = { type: 'camera-sync', name: myName, enabled: track.enabled };
   dataConns.forEach(c => c.send(syncData));
-});
-
-document.querySelector('#chat-toggle-btn')?.addEventListener('click', () => {
-  chatBox.style.display = chatBox.style.display === 'none' ? 'flex' : 'none';
-});
-
-document.querySelector('#chat-send-btn')?.addEventListener('click', () => {
-  const input = document.querySelector<HTMLInputElement>('#chat-input')!;
-  if (!input.value.trim()) return;
-  const msg = { type: 'chat', name: myName, message: input.value };
-  dataConns.forEach(c => c.send(msg));
-  appendMessage("自分", input.value, true);
-  input.value = "";
 });
 
 document.querySelector('#avatar-btn')?.addEventListener('click', async () => {
