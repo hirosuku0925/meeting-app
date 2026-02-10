@@ -114,7 +114,6 @@ async function init() {
 }
 
 function joinRoom(roomKey: string, seat: number) {
-  // ★分身対策：徹底的にリセット
   if (peer) {
     peer.destroy();
     peer = null;
@@ -133,32 +132,31 @@ function joinRoom(roomKey: string, seat: number) {
     
     for (let i = 1; i <= 90; i++) {
       const targetId = `${roomKey}-${i}`;
-      // ★自分自身には絶対に接続しない
       if (id === targetId) continue;
       
       const call = peer!.call(targetId, getCurrentStream());
-      if (call) handleCall(call);
+      if (call) handleCall(call, roomKey); // roomKeyを渡す
       const conn = peer!.connect(targetId);
-      if (conn) handleDataConnection(conn);
+      if (conn) handleDataConnection(conn, roomKey); // roomKeyを渡す
     }
   });
 
   peer.on('call', (call) => {
-    // ★着信時も自分自身なら拒否
-    if (call.peer === peer?.id) {
+    // 相手が自分と同じルームキー（room-名前）を持っていたら拒否
+    if (call.peer.startsWith(roomKey)) {
         call.close();
         return;
     }
     call.answer(getCurrentStream()); 
-    handleCall(call);
+    handleCall(call, roomKey);
   });
 
   peer.on('connection', (conn) => {
-    if (conn.peer === peer?.id) {
+    if (conn.peer.startsWith(roomKey)) {
         conn.close();
         return;
     }
-    handleDataConnection(conn);
+    handleDataConnection(conn, roomKey);
   });
 
   peer.on('error', (err) => {
@@ -168,9 +166,9 @@ function joinRoom(roomKey: string, seat: number) {
   });
 }
 
-function handleCall(call: MediaConnection) {
-  // ★映像受信時に相手が自分自身だったら即ブロック（分身防止の最終防衛ライン）
-  if (call.peer === peer?.id) {
+function handleCall(call: MediaConnection, roomKey: string) {
+  // 最終チェック：相手のIDが自分の現在のルームキーで始まっているなら枠を作らない
+  if (call.peer.startsWith(roomKey) || call.peer === peer?.id) {
     call.close();
     return;
   }
@@ -199,7 +197,9 @@ function handleCall(call: MediaConnection) {
   });
 }
 
-function handleDataConnection(conn: DataConnection) {
+function handleDataConnection(conn: DataConnection, roomKey: string) {
+  if (conn.peer.startsWith(roomKey)) return; // データ通信も自分系統は無視
+
   dataConns.set(conn.peer, conn);
   conn.on('data', (data: any) => {
     const targetContainer = document.getElementById(`container-${conn.peer}`);
@@ -288,7 +288,7 @@ document.querySelector('#join-btn')?.addEventListener('click', () => {
 });
 
 document.querySelector('#exit-btn')?.addEventListener('click', () => {
-    location.reload(); // 終了時はリロードが一番確実
+    location.reload(); 
 });
 
 function appendMessage(sender: string, text: string, isMe = false) {
