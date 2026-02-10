@@ -2,103 +2,65 @@ import './style.css'
 import { Peer, type MediaConnection, type DataConnection } from 'peerjs'
 import { setupVoiceChangerButtonHandler } from './voice-changer-dialog'
 import { setupFaceAvatarButtonHandler } from './face-image-avatar-dialog'
-import { setupBeautyFilterButtonHandler } from './beauty-filter-dialog'
 
-// --- 1. デザイン設定（CSS） ---
+// --- 1. デザイン（マイク・チャット用を追加） ---
 const globalStyle = document.createElement('style');
 globalStyle.textContent = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body, html { width: 100%; height: 100%; overflow: hidden; background: #000; color: white; font-family: sans-serif; }
-  
-  .tool-btn { 
-    background: #333; border: 2px solid #444; color: white; font-size: 20px; 
-    width: 55px; height: 55px; border-radius: 50%; cursor: pointer; 
-    transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; 
-    box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-  }
-  .tool-btn:hover { background: #555; transform: translateY(-3px); border-color: #4facfe; }
-  .tool-btn.active { background: #4facfe !important; border-color: #00f2fe; box-shadow: 0 0 15px #4facfe; }
-  .tool-btn.off { background: #ea4335 !important; border-color: #ff5f52; }
-  
-  .ctrl-group { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-  .btn-label { font-size: 11px; color: #ccc; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; }
-
-  .video-container { 
-    position: relative; height: 100%; min-width: 220px; background: #222; 
-    border-radius: 12px; overflow: hidden; border: 2px solid #333; 
-    box-shadow: 0 8px 20px rgba(0,0,0,0.5); 
-  }
-  .name-overlay { 
-    position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
-    display: none; align-items: center; justify-content: center; 
-    background: linear-gradient(135deg, #222 0%, #111 100%); 
-    font-size: 24px; font-weight: bold; color: #4facfe; z-index: 1; 
-  }
-  .camera-off .name-overlay { display: flex; }
-  
+  .tool-btn { background: #333; border: 2px solid #444; color: white; font-size: 20px; width: 50px; height: 50px; border-radius: 50%; cursor: pointer; transition: 0.2s; display: flex; align-items: center; justify-content: center; }
+  .tool-btn.active { background: #4facfe !important; }
+  .tool-btn.off { background: #ea4335 !important; }
+  .ctrl-group { display: flex; flex-direction: column; align-items: center; gap: 5px; font-size: 10px; }
+  #chat-box { position: absolute; bottom: 130px; right: 20px; width: 250px; height: 300px; background: rgba(0,0,0,0.8); border: 1px solid #444; display: none; flex-direction: column; z-index: 100; border-radius: 8px; }
+  #chat-messages { flex: 1; overflow-y: auto; padding: 10px; font-size: 14px; }
+  #chat-input { background: #222; border: none; border-top: 1px solid #444; color: white; padding: 10px; outline: none; }
+  .video-container { position: relative; height: 100%; min-width: 200px; background: #222; border-radius: 8px; overflow: hidden; border: 1px solid #333; }
   #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; }
-  #status-badge { 
-    position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.8); 
-    padding: 6px 15px; border-radius: 30px; border: 1px solid #4facfe; 
-    font-size: 13px; color: #4facfe; z-index: 10; font-weight: bold;
-  }
 `;
 document.head.appendChild(globalStyle);
 
-// --- 2. HTML構造 ---
+// --- 2. HTML構造（マイク・チャットボタン追加） ---
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <div style="display: flex; height: 100vh; width: 100%; flex-direction: column;">
-    <div id="main-display" style="height: 60vh; position: relative; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden;">
+    <div id="main-display" style="height: 60vh; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center;">
       <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain; z-index: 2;"></video>
       <iframe id="needle-frame" src="https://engine.needle.tools/samples-uploads/facefilter/?" allow="camera; microphone; fullscreen"></iframe>
-      <div id="status-badge">準備OK</div>
+      <div id="chat-box"><div id="chat-messages"></div><input id="chat-input" placeholder="メッセージ..."></div>
     </div>
 
-    <div id="toolbar" style="height: 120px; background: #111; border-top: 2px solid #222; display: flex; align-items: center; justify-content: center; gap: 20px; padding: 0 20px;">
-      <div class="ctrl-group"><button id="cam-btn" class="tool-btn">📹</button><span class="btn-label">Camera</span></div>
-      <div class="ctrl-group"><button id="avatar-btn" class="tool-btn">🎭</button><span class="btn-label">Avatar</span></div>
-      <div class="ctrl-group"><button id="voice-btn" class="tool-btn">📢</button><span class="btn-label">Voice</span></div>
-      <div class="ctrl-group"><button id="beauty-btn" class="tool-btn">✨</button><span class="btn-label">Beauty</span></div>
-      
-      <div style="height: 50px; width: 2px; background: #333; margin: 0 10px;"></div>
-
-      <div style="display: flex; flex-direction: column; gap: 8px;">
-        <input id="name-input" type="text" placeholder="名前" style="background: #222; border: 1px solid #444; color: white; padding: 8px; width: 100px; border-radius: 4px;">
-        <input id="room-input" type="text" placeholder="部屋名" style="background: #222; border: 1px solid #444; color: white; padding: 8px; width: 100px; border-radius: 4px;">
-      </div>
-      <button id="join-btn" style="background: #2ecc71; color: white; padding: 15px 25px; border-radius: 10px; font-weight: bold; border: none; cursor: pointer; font-size: 16px;">入室</button>
+    <div id="toolbar" style="height: 110px; background: #111; display: flex; align-items: center; justify-content: center; gap: 15px;">
+      <div class="ctrl-group"><button id="cam-btn" class="tool-btn">📹</button><span>CAM</span></div>
+      <div class="ctrl-group"><button id="mic-btn" class="tool-btn">🎤</button><span>MIC</span></div>
+      <div class="ctrl-group"><button id="avatar-btn" class="tool-btn">🎭</button><span>AVATAR</span></div>
+      <div class="ctrl-group"><button id="chat-btn" class="tool-btn">💬</button><span>CHAT</span></div>
+      <div style="display: flex; flex-direction: column; gap: 5px;"><input id="name-input" placeholder="名前" style="width: 80px;"><input id="room-input" placeholder="部屋" style="width: 80px;"></div>
+      <button id="join-btn" style="background: #2ecc71; color: white; padding: 10px; border-radius: 5px;">参加</button>
     </div>
 
-    <div id="video-grid" style="flex: 1; background: #050505; display: flex; gap: 15px; padding: 15px; overflow-x: auto; align-items: center;">
+    <div id="video-grid" style="flex: 1; display: flex; gap: 10px; padding: 10px; overflow-x: auto;">
       <div id="local-container" class="video-container">
         <video id="local-video" autoplay playsinline muted style="height: 100%; width: 100%; object-fit: cover;"></video>
-        <div id="local-name-tag" class="name-overlay">あなた</div>
       </div>
     </div>
   </div>
 `;
 
-// --- 3. ロジック本体 ---
+// --- 3. プログラム ---
 let localStream: MediaStream;
 let peer: Peer | null = null;
-let myName = "ゲスト";
 let isAvatarActive = false;
 const calls = new Map<string, MediaConnection>();
-const dataConns = new Map<string, DataConnection>();
 
-const bigVideo = document.querySelector<HTMLVideoElement>('#big-video')!;
 const localVideo = document.querySelector<HTMLVideoElement>('#local-video')!;
-const videoGrid = document.querySelector<HTMLDivElement>('#video-grid')!;
-const statusBadge = document.querySelector<HTMLDivElement>('#status-badge')!;
+const bigVideo = document.querySelector<HTMLVideoElement>('#big-video')!;
 const needleFrame = document.querySelector<HTMLIFrameElement>('#needle-frame')!;
 
-async function changeVideoTrack(newStream: MediaStream) {
-  const newTrack = newStream.getVideoTracks()[0];
-  calls.forEach(call => {
-    const sender = call.peerConnection.getSenders().find(s => s.track?.kind === 'video');
-    if (sender) sender.replaceTrack(newTrack);
-  });
+// 【重要】アバターの映像を「自分の小さい画面」にも反映させるための処理
+function updateAllLocalVideos(stream: MediaStream) {
+  localVideo.srcObject = stream;
+  bigVideo.srcObject = stream;
 }
 
 function getAvatarStream(): MediaStream | null {
@@ -106,83 +68,41 @@ function getAvatarStream(): MediaStream | null {
   return canvas ? (canvas as any).captureStream(30) : null;
 }
 
-// 💥 ここが今回の修理ポイント！
-// 全ボタンの「動け！」という命令を確実にセットする関数
-function setupButtons() {
-  // ボイスチェンジャー
-  setupVoiceChangerButtonHandler('voice-btn');
-  // アバター
-  setupFaceAvatarButtonHandler('avatar-btn');
-  // 美顔フィルター
-  setupBeautyFilterButtonHandler('beauty-btn');
-}
-
 async function init() {
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    localVideo.srcObject = localStream;
-    bigVideo.srcObject = localStream;
-    
-    // 起動時にボタン機能をセット
-    setupButtons();
-
-  } catch(e) { 
-    statusBadge.innerText = "カメラをONにしてください"; 
-  }
+  localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+  updateAllLocalVideos(localStream);
+  setupFaceAvatarButtonHandler('avatar-btn');
+  setupVoiceChangerButtonHandler('voice-btn');
 }
 
-function joinRoom(roomKey: string, seat: number) {
-  if (peer) peer.destroy();
-  // 接続エラーを防ぐためIDに日付を入れる工夫
-  const time = Date.now().toString().slice(-4);
-  peer = new Peer(`${roomKey}-${seat}-${time}`);
-  
-  peer.on('open', (id) => {
-    statusBadge.innerText = "入室完了！";
-    // 自分の名前をグリッドに表示
-    document.getElementById('local-name-tag')!.innerText = myName;
-  });
-
-  peer.on('call', (call) => {
-    call.answer(localStream);
-    handleCall(call);
-  });
-}
-
-function handleCall(call: MediaConnection) {
-  calls.set(call.peer, call);
-  call.on('stream', (stream) => {
-    if (document.getElementById(`container-${call.peer}`)) return;
-    const container = document.createElement('div');
-    container.id = `container-${call.peer}`;
-    container.className = "video-container";
-    container.innerHTML = `<video autoplay playsinline style="height: 100%; width: 100%; object-fit: cover;"></video><div class="name-overlay" id="name-${call.peer}">通信中</div>`;
-    videoGrid.appendChild(container);
-    container.querySelector('video')!.srcObject = stream;
-  });
-}
-
-// --- ボタンの動作イベント ---
-document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
-  const track = localStream.getVideoTracks()[0];
-  track.enabled = !track.enabled;
-  document.querySelector('#local-container')?.classList.toggle('camera-off', !track.enabled);
-  (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
+// ボタン：マイク
+document.querySelector('#mic-btn')?.addEventListener('click', (e) => {
+  const audioTrack = localStream.getAudioTracks()[0];
+  audioTrack.enabled = !audioTrack.enabled;
+  (e.currentTarget as HTMLElement).classList.toggle('off', !audioTrack.enabled);
 });
 
+// ボタン：チャット
+document.querySelector('#chat-btn')?.addEventListener('click', () => {
+  const box = document.getElementById('chat-box')!;
+  box.style.display = box.style.display === 'flex' ? 'none' : 'flex';
+});
+
+// ボタン：アバター（自分の小画面も変えるように修正）
 document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
   isAvatarActive = !isAvatarActive;
   needleFrame.style.display = isAvatarActive ? 'block' : 'none';
   (e.currentTarget as HTMLElement).classList.toggle('active', isAvatarActive);
-  const stream = isAvatarActive ? getAvatarStream() : localStream;
-  if (stream) changeVideoTrack(stream);
-});
-
-document.querySelector('#join-btn')?.addEventListener('click', () => {
-  const room = (document.querySelector('#room-input') as HTMLInputElement).value;
-  if(!room) return alert("部屋名を入れてね！");
-  myName = (document.querySelector('#name-input') as HTMLInputElement).value || "ゲスト";
-  joinRoom(`room-${room}`, 1);
+  
+  if (isAvatarActive) {
+    // 1秒待ってからアバターの映像を取得して「自分」の画面にセット
+    setTimeout(() => {
+      const avStream = getAvatarStream();
+      if (avStream) updateAllLocalVideos(avStream);
+    }, 1000);
+  } else {
+    updateAllLocalVideos(localStream);
+  }
 });
 
 init();
