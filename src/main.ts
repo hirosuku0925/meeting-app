@@ -16,7 +16,6 @@ globalStyle.textContent = `
   .active { background: #4facfe !important; }
   .name-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 18px; font-weight: bold; color: white; display: none; z-index: 2; text-shadow: 0 0 10px rgba(0,0,0,0.8); pointer-events: none; text-align: center; width: 100%; }
   
-  /* カメラオフ・アバター時の表示制御 */
   .camera-off .name-label { display: block; }
   .camera-off video { opacity: 0; }
   .avatar-on { border: 2px solid #4facfe !important; }
@@ -114,16 +113,27 @@ async function init() {
 }
 
 function joinRoom(roomKey: string, seat: number) {
-  if (peer) { peer.destroy(); peer = null; calls.clear(); dataConns.clear(); }
+  // ★重要：既存のPeerとビデオ枠をリセット
+  if (peer) {
+    peer.destroy();
+    peer = null;
+    calls.forEach(c => c.close());
+    calls.clear();
+    dataConns.clear();
+    // 自分以外のビデオを全消去
+    const remotes = videoGrid.querySelectorAll('.video-container:not(#local-container)');
+    remotes.forEach(r => r.remove());
+  }
+
   const myId = `${roomKey}-${seat}`;
   peer = new Peer(myId);
 
   peer.on('open', (id) => {
     statusBadge.innerText = `参加中: ${id}`;
-    // 最大90人対応
+    
     for (let i = 1; i <= 90; i++) {
       const targetId = `${roomKey}-${i}`;
-      // ★分身防止：自分には絶対にかけない
+      // ★分身防止：相手のIDが自分のIDと全く同じなら接続しない
       if (id === targetId) continue;
       
       const call = peer!.call(targetId, getCurrentStream());
@@ -134,7 +144,7 @@ function joinRoom(roomKey: string, seat: number) {
   });
 
   peer.on('call', (call) => {
-    // ★分身防止：自分からの着信は拒絶
+    // ★分身防止：自分自身のIDからの着信は拒否
     if (call.peer === peer?.id) return;
     call.answer(getCurrentStream()); 
     handleCall(call);
@@ -146,7 +156,10 @@ function joinRoom(roomKey: string, seat: number) {
   });
 
   peer.on('error', (err) => {
-    if (err.type === 'unavailable-id' && seat < 90) joinRoom(roomKey, seat + 1);
+    // ID重複時は次の席へ
+    if (err.type === 'unavailable-id' && seat < 90) {
+      joinRoom(roomKey, seat + 1);
+    }
   });
 }
 
@@ -226,7 +239,6 @@ document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
   }
   (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
 
-  // 相手にカメラ状態を同期
   const syncData = { type: 'camera-sync', name: myName, enabled: track.enabled };
   dataConns.forEach(c => c.send(syncData));
 });
