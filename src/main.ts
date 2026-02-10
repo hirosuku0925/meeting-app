@@ -130,33 +130,33 @@ function joinRoom(roomKey: string, seat: number) {
   peer.on('open', (id) => {
     statusBadge.innerText = `参加中: ${id}`;
     
-    for (let i = 1; i <= 90; i++) {
+    for (let i = 1; i <= 20; i++) { // テスト用に範囲を絞る
       const targetId = `${roomKey}-${i}`;
       if (id === targetId) continue;
       
       const call = peer!.call(targetId, getCurrentStream());
-      if (call) handleCall(call, roomKey); // roomKeyを渡す
+      if (call) handleCall(call);
       const conn = peer!.connect(targetId);
-      if (conn) handleDataConnection(conn, roomKey); // roomKeyを渡す
+      if (conn) handleDataConnection(conn);
     }
   });
 
   peer.on('call', (call) => {
-    // 相手が自分と同じルームキー（room-名前）を持っていたら拒否
-    if (call.peer.startsWith(roomKey)) {
+    // 完全一致（自分自身）の場合のみ拒否
+    if (call.peer === peer?.id) {
         call.close();
         return;
     }
     call.answer(getCurrentStream()); 
-    handleCall(call, roomKey);
+    handleCall(call);
   });
 
   peer.on('connection', (conn) => {
-    if (conn.peer.startsWith(roomKey)) {
+    if (conn.peer === peer?.id) {
         conn.close();
         return;
     }
-    handleDataConnection(conn, roomKey);
+    handleDataConnection(conn);
   });
 
   peer.on('error', (err) => {
@@ -166,10 +166,9 @@ function joinRoom(roomKey: string, seat: number) {
   });
 }
 
-function handleCall(call: MediaConnection, roomKey: string) {
-  // 最終チェック：相手のIDが自分の現在のルームキーで始まっているなら枠を作らない
-  if (call.peer.startsWith(roomKey) || call.peer === peer?.id) {
-    call.close();
+function handleCall(call: MediaConnection) {
+  // すでに枠がある、または自分自身なら何もしない
+  if (document.getElementById(`container-${call.peer}`) || call.peer === peer?.id) {
     return;
   }
 
@@ -197,8 +196,8 @@ function handleCall(call: MediaConnection, roomKey: string) {
   });
 }
 
-function handleDataConnection(conn: DataConnection, roomKey: string) {
-  if (conn.peer.startsWith(roomKey)) return; // データ通信も自分系統は無視
+function handleDataConnection(conn: DataConnection) {
+  if (conn.peer === peer?.id) return;
 
   dataConns.set(conn.peer, conn);
   conn.on('data', (data: any) => {
