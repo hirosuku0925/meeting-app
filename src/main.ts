@@ -16,13 +16,13 @@ globalStyle.textContent = `
   .is-locked .btn-lock-overlay { display: block; }
   .is-locked { opacity: 0.3 !important; }
 
-  /* ★【修正】最強の透明シールド：画面の下半分（50%）を完璧にガード */
+  /* ★【鉄壁】画面の下半分を完全にガードする透明な壁 */
   #needle-shield {
     position: absolute;
-    bottom: 0; left: 0; width: 100%; height: 50%; 
-    z-index: 99999; /* 他のどの要素よりも手前に */
+    bottom: 0; left: 0; width: 100%; height: 55%; /* 画像のボタンエリアを完全に覆う */
+    z-index: 99999;
     display: none; 
-    background: rgba(0,0,0,0); /* 透明（テスト時は 0.3 にすると赤く見えます） */
+    background: rgba(0,0,0,0); 
     cursor: no-drop;
   }
 
@@ -48,13 +48,8 @@ app.innerHTML = `
         <div id="needle-shield"></div> 
       </div>
       <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; font-size: 12px; z-index: 2001;">準備OK</div>
-      
-      <div id="chat-box">
-        <div id="chat-messages"></div>
-        <div id="chat-input-area"><input id="chat-msg-input" type="text" placeholder="メッセージ..."></div>
-      </div>
+      <div id="chat-box"><div id="chat-messages"></div><div id="chat-input-area"><input id="chat-msg-input" type="text" placeholder="メッセージ..."></div></div>
     </div>
-
     <div id="toolbar" style="height: 100px; background: #111; display: flex; align-items: center; justify-content: center; gap: 12px;">
       <button id="cam-btn" class="tool-btn">📹</button>
       <button id="mic-btn" class="tool-btn">🎤</button>
@@ -65,7 +60,6 @@ app.innerHTML = `
       <input id="room-input" type="text" placeholder="部屋" style="background: #222; border: 1px solid #444; color: white; padding: 10px; width: 70px;">
       <button id="join-btn" style="background: #2ecc71; color: white; padding: 10px 15px; border-radius: 5px; font-weight: bold;">参加</button>
     </div>
-
     <div id="video-grid" style="flex: 1; background: #000; display: flex; gap: 10px; padding: 10px; overflow-x: auto;">
       <div id="local-container" class="video-container">
         <video id="local-video" autoplay playsinline muted style="height: 100%; width: 100%; object-fit: cover;"></video>
@@ -76,45 +70,26 @@ app.innerHTML = `
 `;
 
 let localStream: MediaStream | null = null;
-let screenStream: MediaStream | null = null;
 let peer: Peer | null = null;
 let isAvatarActive = false;
 let isJoined = false;
-let myName = "ゲスト";
 const dataConns = new Map<string, DataConnection>();
 const calls = new Map<string, MediaConnection>();
 
 const bigVideo = document.querySelector<HTMLVideoElement>('#big-video')!;
 const localVideo = document.querySelector<HTMLVideoElement>('#local-video')!;
-const videoGrid = document.querySelector<HTMLDivElement>('#video-grid')!;
 const statusBadge = document.querySelector<HTMLDivElement>('#status-badge')!;
 const needleFrame = document.querySelector<HTMLIFrameElement>('#needle-frame')!;
 const needleShield = document.getElementById('needle-shield')!;
 
+// ★映像を更新する関数
 function updateAllVideos(stream: MediaStream) {
   localVideo.srcObject = stream;
   bigVideo.srcObject = stream;
-  const track = stream.getVideoTracks()[0];
+  const videoTrack = stream.getVideoTracks()[0];
   calls.forEach(call => {
     const sender = call.peerConnection.getSenders().find(s => s.track?.kind === 'video');
-    if (sender) sender.replaceTrack(track).catch(() => {
-        // トラックの入れ替えに失敗した場合（相手が切れている時など）は無視
-    });
-  });
-}
-
-function handleDataConnection(conn: DataConnection) {
-  dataConns.set(conn.peer, conn);
-  conn.on('data', (data: any) => {
-    if (data.type === 'chat') {
-        const msg = document.createElement('div');
-        msg.innerText = `${data.name}: ${data.text}`;
-        document.getElementById('chat-messages')?.appendChild(msg);
-    }
-    if (data.type === 'state') {
-      const container = document.getElementById(`container-${conn.peer}`);
-      if (container) data.cam ? container.classList.remove('camera-off') : container.classList.add('camera-off');
-    }
+    if (sender) sender.replaceTrack(videoTrack);
   });
 }
 
@@ -126,46 +101,48 @@ function handleCall(call: MediaConnection) {
     container.id = `container-${call.peer}`;
     container.className = "video-container";
     container.innerHTML = `<video autoplay playsinline style="height: 100%; width: 100%; object-fit: cover;"></video><div class="name-overlay">通信中</div>`;
-    videoGrid.appendChild(container);
+    document.getElementById('video-grid')?.appendChild(container);
     container.querySelector('video')!.srcObject = stream;
   });
-  // 相手が切断した時の処理を追加
   call.on('close', () => {
     document.getElementById(`container-${call.peer}`)?.remove();
     calls.delete(call.peer);
   });
 }
 
-function joinRoom(roomKey: string, seat: number) {
+function joinRoom(roomKey: string) {
   if (peer) peer.destroy();
-  // IDをよりユニークにして「入れない」を防ぐ
-  peer = new Peer(`${roomKey}-${seat}-${Date.now()}`);
-  
+  // ★名前の重なりを防ぐためにランダムなIDを作成
+  const myId = `${roomKey}-${Math.floor(Math.random() * 10000)}`;
+  peer = new Peer(myId);
+
   peer.on('open', () => {
     isJoined = true;
-    statusBadge.innerText = "入室完了（ガード有効）";
+    statusBadge.innerText = "入室中（ガード中）";
     document.getElementById('avatar-btn')?.classList.add('is-locked');
+    needleShield.style.display = 'block'; // シールド出現！
     
-    // ★入室時にシールドを出現！
-    needleShield.style.display = 'block';
-
-    for (let i = 1; i <= 5; i++) {
-      if (i === seat) continue;
-      const targetIdBase = `${roomKey}-${i}`;
-      // 他のユーザー（全スロット）に対して接続を試みる
-      // (本当はシグナリングが必要ですが、この簡易版では全スロットへ接続)
-    }
+    // 入室時に他のユーザーを自動で探す処理（本来はリストが必要ですが、ここでは着信を待つのが確実です）
   });
 
   peer.on('call', (call) => {
-    const stream = isAvatarActive ? ( (needleFrame.contentWindow?.document.querySelector('canvas') as any)?.captureStream(30) || localStream ) : localStream;
-    call.answer(stream!);
+    const currentStream = isAvatarActive ? ((needleFrame.contentWindow?.document.querySelector('canvas') as any)?.captureStream(30) || localStream) : localStream;
+    call.answer(currentStream!);
     handleCall(call);
   });
 
-  peer.on('connection', handleDataConnection);
+  peer.on('connection', (conn) => {
+    dataConns.set(conn.peer, conn);
+    // 接続されたら自分から相手にかけ直すことで、確実に映像を届ける
+    if (localStream) {
+        const currentStream = isAvatarActive ? ((needleFrame.contentWindow?.document.querySelector('canvas') as any)?.captureStream(30) || localStream) : localStream;
+        const call = peer!.call(conn.peer, currentStream!);
+        handleCall(call);
+    }
+  });
 }
 
+// アバター切り替え
 document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
   if (isJoined) return;
   isAvatarActive = !isAvatarActive;
@@ -177,7 +154,7 @@ document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
       const canvas = needleFrame.contentWindow?.document.querySelector('canvas');
       const avStream = (canvas as any)?.captureStream(30);
       if (avStream) updateAllVideos(avStream);
-    }, 2000); // 起動時間を少し長めに待つ
+    }, 2000);
   } else {
     updateAllVideos(localStream!);
   }
@@ -185,37 +162,14 @@ document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
 
 document.querySelector('#join-btn')?.addEventListener('click', () => {
   const room = (document.querySelector('#room-input') as HTMLInputElement).value;
-  myName = (document.querySelector('#name-input') as HTMLInputElement).value || "ゲスト";
-  if (room) joinRoom(`room-${room}`, 1);
-});
-
-// ...（カメラ・マイク・共有・チャットのイベントは前回と同じ）...
-document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
-  const track = localStream?.getVideoTracks()[0];
-  if (track) {
-    track.enabled = !track.enabled;
-    (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
-    document.getElementById('local-container')?.classList.toggle('camera-off', !track.enabled);
-    dataConns.forEach(conn => conn.send({ type: 'state', cam: track.enabled }));
-  }
-});
-document.querySelector('#mic-btn')?.addEventListener('click', (e) => {
-  const track = localStream?.getAudioTracks()[0];
-  if (track) {
-    track.enabled = !track.enabled;
-    (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
-  }
+  if (room) joinRoom(`room-${room}`);
 });
 
 async function init() {
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    localVideo.srcObject = localStream;
-    bigVideo.srcObject = localStream;
-    setupFaceAvatarButtonHandler('avatar-btn');
-    setupVoiceChangerButtonHandler('voice-btn');
-  } catch(err) {
-    statusBadge.innerText = "カメラを許可してね！";
-  }
+  localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+  localVideo.srcObject = localStream;
+  bigVideo.srcObject = localStream;
+  setupFaceAvatarButtonHandler('avatar-btn');
+  setupVoiceChangerButtonHandler('voice-btn');
 }
 init();
