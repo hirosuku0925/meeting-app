@@ -72,6 +72,7 @@ const needleFrame = document.querySelector<HTMLIFrameElement>('#needle-frame')!;
 const needleGuard = document.querySelector<HTMLDivElement>('#needle-guard')!;
 const chatBox = document.querySelector<HTMLDivElement>('#chat-box')!;
 const chatMessages = document.querySelector<HTMLDivElement>('#chat-messages')!;
+const chatInput = document.querySelector<HTMLInputElement>('#chat-input')!;
 
 let localStream: MediaStream;
 let peer: Peer | null = null;
@@ -113,14 +114,13 @@ async function init() {
 }
 
 function joinRoom(roomKey: string, seat: number) {
-  // ★重要：既存のPeerとビデオ枠をリセット
+  // ★分身対策：徹底的にリセット
   if (peer) {
     peer.destroy();
     peer = null;
     calls.forEach(c => c.close());
     calls.clear();
     dataConns.clear();
-    // 自分以外のビデオを全消去
     const remotes = videoGrid.querySelectorAll('.video-container:not(#local-container)');
     remotes.forEach(r => r.remove());
   }
@@ -133,7 +133,7 @@ function joinRoom(roomKey: string, seat: number) {
     
     for (let i = 1; i <= 90; i++) {
       const targetId = `${roomKey}-${i}`;
-      // ★分身防止：相手のIDが自分のIDと全く同じなら接続しない
+      // ★自分自身には絶対に接続しない
       if (id === targetId) continue;
       
       const call = peer!.call(targetId, getCurrentStream());
@@ -144,19 +144,24 @@ function joinRoom(roomKey: string, seat: number) {
   });
 
   peer.on('call', (call) => {
-    // ★分身防止：自分自身のIDからの着信は拒否
-    if (call.peer === peer?.id) return;
+    // ★着信時も自分自身なら拒否
+    if (call.peer === peer?.id) {
+        call.close();
+        return;
+    }
     call.answer(getCurrentStream()); 
     handleCall(call);
   });
 
   peer.on('connection', (conn) => {
-    if (conn.peer === peer?.id) return;
+    if (conn.peer === peer?.id) {
+        conn.close();
+        return;
+    }
     handleDataConnection(conn);
   });
 
   peer.on('error', (err) => {
-    // ID重複時は次の席へ
     if (err.type === 'unavailable-id' && seat < 90) {
       joinRoom(roomKey, seat + 1);
     }
@@ -164,6 +169,12 @@ function joinRoom(roomKey: string, seat: number) {
 }
 
 function handleCall(call: MediaConnection) {
+  // ★映像受信時に相手が自分自身だったら即ブロック（分身防止の最終防衛ライン）
+  if (call.peer === peer?.id) {
+    call.close();
+    return;
+  }
+
   calls.set(call.peer, call);
   call.on('stream', (stream) => {
     if (document.getElementById(`container-${call.peer}`)) return;
@@ -256,6 +267,19 @@ document.querySelector('#avatar-btn')?.addEventListener('click', async () => {
   dataConns.forEach(c => c.send(syncData));
 });
 
+document.querySelector('#chat-toggle-btn')?.addEventListener('click', () => {
+  chatBox.style.display = (chatBox.style.display === 'none') ? 'flex' : 'none';
+});
+
+document.querySelector('#chat-send-btn')?.addEventListener('click', () => {
+  const msg = chatInput.value.trim();
+  if (!msg) return;
+  const data = { type: 'chat', name: myName, message: msg };
+  dataConns.forEach(conn => conn.send(data));
+  appendMessage(myName, msg, true);
+  chatInput.value = "";
+});
+
 document.querySelector('#join-btn')?.addEventListener('click', () => {
   const room = (document.querySelector('#room-input') as HTMLInputElement).value.trim();
   myName = (document.querySelector('#name-input') as HTMLInputElement).value.trim() || "ゲスト";
@@ -263,9 +287,13 @@ document.querySelector('#join-btn')?.addEventListener('click', () => {
   joinRoom(`room-${room}`, 1);
 });
 
+document.querySelector('#exit-btn')?.addEventListener('click', () => {
+    location.reload(); // 終了時はリロードが一番確実
+});
+
 function appendMessage(sender: string, text: string, isMe = false) {
   const div = document.createElement('div');
-  div.style.color = isMe ? "#4facfe" : "white";
+  div.style.cssText = `margin-bottom: 5px; word-break: break-all; color: ${isMe ? "#4facfe" : "white"};`;
   div.innerText = `${sender}: ${text}`;
   chatMessages.appendChild(div);
   chatMessages.scrollTop = chatMessages.scrollHeight;
