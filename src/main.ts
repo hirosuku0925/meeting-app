@@ -77,6 +77,7 @@ const chatInput = document.querySelector<HTMLInputElement>('#chat-input')!;
 let localStream: MediaStream;
 let peer: Peer | null = null;
 let myName = "ゲスト";
+let currentRoomKey = ""; // 現在の部屋プレフィックス保存用
 let isAvatarActive = false;
 const calls = new Map<string, MediaConnection>();
 const dataConns = new Map<string, DataConnection>();
@@ -124,13 +125,14 @@ function joinRoom(roomKey: string, seat: number) {
     remotes.forEach(r => r.remove());
   }
 
+  currentRoomKey = roomKey; // 例: "room-aki"
   const myId = `${roomKey}-${seat}`;
   peer = new Peer(myId);
 
   peer.on('open', (id) => {
     statusBadge.innerText = `参加中: ${id}`;
     
-    for (let i = 1; i <= 20; i++) { // テスト用に範囲を絞る
+    for (let i = 1; i <= 20; i++) {
       const targetId = `${roomKey}-${i}`;
       if (id === targetId) continue;
       
@@ -142,8 +144,8 @@ function joinRoom(roomKey: string, seat: number) {
   });
 
   peer.on('call', (call) => {
-    // 完全一致（自分自身）の場合のみ拒否
-    if (call.peer === peer?.id) {
+    // 相手が自分と同じルームキー（自分自身の分身）なら即切断
+    if (call.peer.startsWith(currentRoomKey)) {
         call.close();
         return;
     }
@@ -152,7 +154,7 @@ function joinRoom(roomKey: string, seat: number) {
   });
 
   peer.on('connection', (conn) => {
-    if (conn.peer === peer?.id) {
+    if (conn.peer.startsWith(currentRoomKey)) {
         conn.close();
         return;
     }
@@ -167,14 +169,17 @@ function joinRoom(roomKey: string, seat: number) {
 }
 
 function handleCall(call: MediaConnection) {
-  // すでに枠がある、または自分自身なら何もしない
-  if (document.getElementById(`container-${call.peer}`) || call.peer === peer?.id) {
+  // 自分のルームキーで始まる相手（自分の分身）は絶対に表示しない
+  if (call.peer.startsWith(currentRoomKey) || call.peer === peer?.id) {
     return;
   }
 
   calls.set(call.peer, call);
   call.on('stream', (stream) => {
+    // ストリームが来ても、自分の分身なら表示を阻止
+    if (call.peer.startsWith(currentRoomKey)) return;
     if (document.getElementById(`container-${call.peer}`)) return;
+
     const container = document.createElement('div');
     container.id = `container-${call.peer}`;
     container.className = "video-container";
@@ -190,6 +195,7 @@ function handleCall(call: MediaConnection) {
     videoGrid.appendChild(container);
     container.onclick = () => { bigVideo.srcObject = stream; };
   });
+
   call.on('close', () => { 
     document.getElementById(`container-${call.peer}`)?.remove(); 
     calls.delete(call.peer); 
@@ -197,7 +203,8 @@ function handleCall(call: MediaConnection) {
 }
 
 function handleDataConnection(conn: DataConnection) {
-  if (conn.peer === peer?.id) return;
+  // 自分自身の分身からの通信は無視
+  if (conn.peer.startsWith(currentRoomKey)) return;
 
   dataConns.set(conn.peer, conn);
   conn.on('data', (data: any) => {
