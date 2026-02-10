@@ -20,6 +20,9 @@ globalStyle.textContent = `
   #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; }
   #needle-guard { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: transparent; display: none; z-index: 6; }
   .video-container { position: relative; height: 100%; min-width: 180px; background: #222; border-radius: 8px; overflow: hidden; border: 1px solid #333; }
+  /* アバター表示用のスタイル */
+  .avatar-on .name-label { display: block; color: #4facfe; }
+  .avatar-on video { filter: brightness(1.2) contrast(1.1); }
 `;
 document.head.appendChild(globalStyle);
 
@@ -53,7 +56,7 @@ app.innerHTML = `
     <div id="video-grid" style="flex: 1; background: #000; display: flex; gap: 10px; padding: 10px; overflow-x: auto;">
       <div id="local-container" class="video-container">
         <video id="local-video" autoplay playsinline muted style="height: 100%; width: 100%; object-fit: cover;"></video>
-        <div id="local-name-label" class="name-label"></div>
+        <div id="local-name-label" class="name-label">自分</div>
       </div>
     </div>
   </div>
@@ -78,7 +81,6 @@ const dataConns = new Map<string, DataConnection>();
 
 // --- 4. ヘルパー関数 ---
 
-// 現在配信すべき映像（カメラ or アバター）を取得する
 function getCurrentStream() {
   if (isAvatarActive) {
     const canvas = needleFrame.contentWindow?.document.querySelector('canvas');
@@ -87,10 +89,9 @@ function getCurrentStream() {
   return localStream;
 }
 
-// 接続中の全員のトラックを差し替える
 async function changeVideoTrack(newStream: MediaStream) {
   const newTrack = newStream.getVideoTracks()[0];
-  localVideo.srcObject = newStream; // 自分自身の表示も更新
+  localVideo.srcObject = newStream; 
   
   calls.forEach(call => {
     const sender = call.peerConnection.getSenders().find(s => s.track?.kind === 'video');
@@ -113,34 +114,29 @@ async function init() {
 
 function joinRoom(roomKey: string, seat: number) {
   if (peer) { peer.destroy(); peer = null; calls.clear(); dataConns.clear(); }
-  
   const myId = `${roomKey}-${seat}`;
   peer = new Peer(myId);
 
   peer.on('open', (id) => {
     statusBadge.innerText = `参加中: ${id}`;
-    // 自分(seat)以外の1~5番に接続を試みる
     for (let i = 1; i <= 5; i++) {
-      if (i === seat) continue; // ★自分自身への電話を防止
+      if (i === seat) continue;
       const targetId = `${roomKey}-${i}`;
-      
       const call = peer!.call(targetId, getCurrentStream());
       if (call) handleCall(call);
-      
       const conn = peer!.connect(targetId);
       if (conn) handleDataConnection(conn);
     }
   });
 
   peer.on('call', (call) => {
-    // 着信時、現在アバターならアバター映像で応答する
     call.answer(getCurrentStream()); 
     handleCall(call);
   });
 
   peer.on('connection', (conn) => handleDataConnection(conn));
   peer.on('error', (err) => {
-    if (err.type === 'unavailable-id') joinRoom(roomKey, seat + 1); // 席が埋まってたら次へ
+    if (err.type === 'unavailable-id') joinRoom(roomKey, seat + 1);
   });
 }
 
@@ -154,17 +150,36 @@ function handleCall(call: MediaConnection) {
     const v = document.createElement('video');
     v.srcObject = stream; v.autoplay = true; v.playsInline = true;
     v.style.cssText = "height: 100%; width: 100%; object-fit: cover;";
+    const label = document.createElement('div');
+    label.className = "name-label";
+    label.innerText = "相手";
+    
     container.appendChild(v);
+    container.appendChild(label);
     videoGrid.appendChild(container);
     container.onclick = () => { bigVideo.srcObject = stream; };
   });
   call.on('close', () => { document.getElementById(`container-${call.peer}`)?.remove(); calls.delete(call.peer); });
 }
 
+// データ受信のハンドラを強化
 function handleDataConnection(conn: DataConnection) {
   dataConns.set(conn.peer, conn);
   conn.on('data', (data: any) => {
-    if (data.type === 'chat') appendMessage(data.name, data.message);
+    if (data.type === 'chat') {
+      appendMessage(data.name, data.message);
+    } 
+    // ★追加: 相手からアバターのステータス(1 or 0)が届いた時の処理
+    else if (data.type === 'avatar-sync') {
+      const targetContainer = document.getElementById(`container-${conn.peer}`);
+      if (targetContainer) {
+        if (data.value === 1) {
+          targetContainer.classList.add('avatar-on');
+        } else {
+          targetContainer.classList.remove('avatar-on');
+        }
+      }
+    }
   });
 }
 
@@ -180,8 +195,12 @@ document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
   const track = localStream.getVideoTracks()[0];
   track.enabled = !track.enabled;
   const container = document.querySelector('#local-container')!;
-  if (!track.enabled) { container.classList.add('camera-off'); (document.querySelector('#local-name-label') as HTMLElement).textContent = myName; }
-  else { container.classList.remove('camera-off'); }
+  if (!track.enabled) { 
+    container.classList.add('camera-off'); 
+    (document.querySelector('#local-name-label') as HTMLElement).textContent = myName; 
+  } else { 
+    container.classList.remove('camera-off'); 
+  }
   (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
 });
 
@@ -198,6 +217,7 @@ document.querySelector('#chat-send-btn')?.addEventListener('click', () => {
   input.value = "";
 });
 
+// アバターボタンの処理を強化
 document.querySelector('#avatar-btn')?.addEventListener('click', async () => {
   isAvatarActive = !isAvatarActive;
   needleFrame.style.display = isAvatarActive ? 'block' : 'none';
@@ -205,8 +225,12 @@ document.querySelector('#avatar-btn')?.addEventListener('click', async () => {
   bigVideo.style.opacity = isAvatarActive ? '0' : '1';
   (document.querySelector('#avatar-btn') as HTMLElement).classList.toggle('active', isAvatarActive);
 
-  // 映像を切り替え
+  // 1. 映像を切り替え
   await changeVideoTrack(getCurrentStream());
+
+  // 2. ★追加: 相手全員に「アバター状態(1 or 0)」の変数を送る
+  const syncData = { type: 'avatar-sync', value: isAvatarActive ? 1 : 0 };
+  dataConns.forEach(c => c.send(syncData));
 });
 
 document.querySelector('#join-btn')?.addEventListener('click', () => {
