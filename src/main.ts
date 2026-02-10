@@ -76,14 +76,29 @@ let isAvatarActive = false;
 const calls = new Map<string, MediaConnection>();
 const dataConns = new Map<string, DataConnection>();
 
-// --- 4. 映像切り替え ---
+// --- 4. ヘルパー関数 ---
+
+// 現在配信すべき映像（カメラ or アバター）を取得する
+function getCurrentStream() {
+  if (isAvatarActive) {
+    const canvas = needleFrame.contentWindow?.document.querySelector('canvas');
+    if (canvas) return (canvas as any).captureStream(30);
+  }
+  return localStream;
+}
+
+// 接続中の全員のトラックを差し替える
 async function changeVideoTrack(newStream: MediaStream) {
   const newTrack = newStream.getVideoTracks()[0];
+  localVideo.srcObject = newStream; // 自分自身の表示も更新
+  
   calls.forEach(call => {
     const sender = call.peerConnection.getSenders().find(s => s.track?.kind === 'video');
     if (sender) sender.replaceTrack(newTrack);
   });
 }
+
+// --- 5. 通信ロジック ---
 
 async function init() {
   try {
@@ -98,24 +113,35 @@ async function init() {
 
 function joinRoom(roomKey: string, seat: number) {
   if (peer) { peer.destroy(); peer = null; calls.clear(); dataConns.clear(); }
-  peer = new Peer(`${roomKey}-${seat}`);
+  
+  const myId = `${roomKey}-${seat}`;
+  peer = new Peer(myId);
 
   peer.on('open', (id) => {
     statusBadge.innerText = `参加中: ${id}`;
-    // 他の席(1~5)に自分から繋ぎにいく
+    // 自分(seat)以外の1~5番に接続を試みる
     for (let i = 1; i <= 5; i++) {
-      if (i === seat) continue;
+      if (i === seat) continue; // ★自分自身への電話を防止
       const targetId = `${roomKey}-${i}`;
-      const call = peer!.call(targetId, localStream);
+      
+      const call = peer!.call(targetId, getCurrentStream());
       if (call) handleCall(call);
+      
       const conn = peer!.connect(targetId);
       if (conn) handleDataConnection(conn);
     }
   });
 
-  peer.on('call', (call) => { call.answer(localStream); handleCall(call); });
+  peer.on('call', (call) => {
+    // 着信時、現在アバターならアバター映像で応答する
+    call.answer(getCurrentStream()); 
+    handleCall(call);
+  });
+
   peer.on('connection', (conn) => handleDataConnection(conn));
-  peer.on('error', (err) => { if (err.type === 'unavailable-id') joinRoom(roomKey, seat + 1); });
+  peer.on('error', (err) => {
+    if (err.type === 'unavailable-id') joinRoom(roomKey, seat + 1); // 席が埋まってたら次へ
+  });
 }
 
 function handleCall(call: MediaConnection) {
@@ -142,7 +168,8 @@ function handleDataConnection(conn: DataConnection) {
   });
 }
 
-// --- 5. ボタンイベント ---
+// --- 6. ボタンイベント ---
+
 document.querySelector('#mic-btn')?.addEventListener('click', (e) => {
   const track = localStream.getAudioTracks()[0];
   track.enabled = !track.enabled;
@@ -171,22 +198,15 @@ document.querySelector('#chat-send-btn')?.addEventListener('click', () => {
   input.value = "";
 });
 
-document.querySelector('#avatar-btn')?.addEventListener('click', () => {
+document.querySelector('#avatar-btn')?.addEventListener('click', async () => {
   isAvatarActive = !isAvatarActive;
   needleFrame.style.display = isAvatarActive ? 'block' : 'none';
   needleGuard.style.display = isAvatarActive ? 'block' : 'none';
   bigVideo.style.opacity = isAvatarActive ? '0' : '1';
   (document.querySelector('#avatar-btn') as HTMLElement).classList.toggle('active', isAvatarActive);
 
-  if (isAvatarActive) {
-    const canvas = needleFrame.contentWindow?.document.querySelector('canvas');
-    if (canvas) {
-      const stream = (canvas as any).captureStream(30);
-      changeVideoTrack(stream);
-    }
-  } else {
-    changeVideoTrack(localStream);
-  }
+  // 映像を切り替え
+  await changeVideoTrack(getCurrentStream());
 });
 
 document.querySelector('#join-btn')?.addEventListener('click', () => {
