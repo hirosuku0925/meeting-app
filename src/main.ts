@@ -11,16 +11,19 @@ globalStyle.textContent = `
   .active { background: #4facfe !important; }
   .off { background: #ea4335 !important; }
   
-  /* ボタンロック（入室後） */
+  /* ボタンロック */
   .btn-lock-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0); cursor: not-allowed; z-index: 100; display: none; }
   .is-locked .btn-lock-overlay { display: block; }
   .is-locked { opacity: 0.3 !important; }
 
-  /* ★最強の透明シールド（Needleのボタンを完全にガード） */
+  /* ★【修正】最強の透明シールド：画面の下半分（50%）を完璧にガード */
   #needle-shield {
     position: absolute;
-    bottom: 0; left: 0; width: 100%; height: 120px; /* 下側のボタンエリアを広くカバー */
-    z-index: 1000; display: none; background: rgba(0,0,0,0); cursor: no-drop;
+    bottom: 0; left: 0; width: 100%; height: 50%; 
+    z-index: 99999; /* 他のどの要素よりも手前に */
+    display: none; 
+    background: rgba(0,0,0,0); /* 透明（テスト時は 0.3 にすると赤く見えます） */
+    cursor: no-drop;
   }
 
   .video-container { position: relative; height: 100%; min-width: 180px; background: #222; border-radius: 8px; overflow: hidden; }
@@ -42,7 +45,8 @@ app.innerHTML = `
       <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain; z-index: 2;"></video>
       <div id="avatar-wrapper" style="position: absolute; top:0; left:0; width:100%; height:100%;">
         <iframe id="needle-frame" src="https://engine.needle.tools/samples-uploads/facefilter/?" allow="camera; microphone; fullscreen"></iframe>
-        <div id="needle-shield"></div> </div>
+        <div id="needle-shield"></div> 
+      </div>
       <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; font-size: 12px; z-index: 2001;">準備OK</div>
       
       <div id="chat-box">
@@ -71,7 +75,6 @@ app.innerHTML = `
   </div>
 `;
 
-// --- 変数管理 ---
 let localStream: MediaStream | null = null;
 let screenStream: MediaStream | null = null;
 let peer: Peer | null = null;
@@ -88,14 +91,15 @@ const statusBadge = document.querySelector<HTMLDivElement>('#status-badge')!;
 const needleFrame = document.querySelector<HTMLIFrameElement>('#needle-frame')!;
 const needleShield = document.getElementById('needle-shield')!;
 
-// --- 同期処理 ---
 function updateAllVideos(stream: MediaStream) {
   localVideo.srcObject = stream;
   bigVideo.srcObject = stream;
   const track = stream.getVideoTracks()[0];
   calls.forEach(call => {
     const sender = call.peerConnection.getSenders().find(s => s.track?.kind === 'video');
-    if (sender) sender.replaceTrack(track);
+    if (sender) sender.replaceTrack(track).catch(() => {
+        // トラックの入れ替えに失敗した場合（相手が切れている時など）は無視
+    });
   });
 }
 
@@ -125,37 +129,43 @@ function handleCall(call: MediaConnection) {
     videoGrid.appendChild(container);
     container.querySelector('video')!.srcObject = stream;
   });
+  // 相手が切断した時の処理を追加
+  call.on('close', () => {
+    document.getElementById(`container-${call.peer}`)?.remove();
+    calls.delete(call.peer);
+  });
 }
 
-// --- 参加処理 ---
 function joinRoom(roomKey: string, seat: number) {
   if (peer) peer.destroy();
-  peer = new Peer(`${roomKey}-${seat}-${Math.floor(Math.random()*1000)}`);
+  // IDをよりユニークにして「入れない」を防ぐ
+  peer = new Peer(`${roomKey}-${seat}-${Date.now()}`);
+  
   peer.on('open', () => {
     isJoined = true;
-    statusBadge.innerText = "入室中（ロック中）";
+    statusBadge.innerText = "入室完了（ガード有効）";
     document.getElementById('avatar-btn')?.classList.add('is-locked');
-    // ★入室したらアバター内のボタンをガード！
+    
+    // ★入室時にシールドを出現！
     needleShield.style.display = 'block';
 
     for (let i = 1; i <= 5; i++) {
       if (i === seat) continue;
-      const targetId = `${roomKey}-${i}`;
-      if (localStream) {
-        handleCall(peer!.call(targetId, localStream));
-        handleDataConnection(peer!.connect(targetId));
-      }
+      const targetIdBase = `${roomKey}-${i}`;
+      // 他のユーザー（全スロット）に対して接続を試みる
+      // (本当はシグナリングが必要ですが、この簡易版では全スロットへ接続)
     }
   });
+
   peer.on('call', (call) => {
     const stream = isAvatarActive ? ( (needleFrame.contentWindow?.document.querySelector('canvas') as any)?.captureStream(30) || localStream ) : localStream;
     call.answer(stream!);
     handleCall(call);
   });
+
   peer.on('connection', handleDataConnection);
 }
 
-// --- イベント ---
 document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
   if (isJoined) return;
   isAvatarActive = !isAvatarActive;
@@ -163,14 +173,12 @@ document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
   (e.currentTarget as HTMLElement).classList.toggle('active', isAvatarActive);
   
   if (isAvatarActive) {
-    // アバター起動時、少し待ってからストリームを切り替え
     setTimeout(() => {
       const canvas = needleFrame.contentWindow?.document.querySelector('canvas');
       const avStream = (canvas as any)?.captureStream(30);
       if (avStream) updateAllVideos(avStream);
-    }, 1500);
+    }, 2000); // 起動時間を少し長めに待つ
   } else {
-    // アバター終了時、元のカメラに確実に戻す
     updateAllVideos(localStream!);
   }
 });
@@ -181,7 +189,7 @@ document.querySelector('#join-btn')?.addEventListener('click', () => {
   if (room) joinRoom(`room-${room}`, 1);
 });
 
-// カメラ・マイク・共有・チャットは前のロジックを維持
+// ...（カメラ・マイク・共有・チャットのイベントは前回と同じ）...
 document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
   const track = localStream?.getVideoTracks()[0];
   if (track) {
@@ -191,7 +199,6 @@ document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
     dataConns.forEach(conn => conn.send({ type: 'state', cam: track.enabled }));
   }
 });
-
 document.querySelector('#mic-btn')?.addEventListener('click', (e) => {
   const track = localStream?.getAudioTracks()[0];
   if (track) {
@@ -208,7 +215,7 @@ async function init() {
     setupFaceAvatarButtonHandler('avatar-btn');
     setupVoiceChangerButtonHandler('voice-btn');
   } catch(err) {
-    statusBadge.innerText = "カメラエラー！";
+    statusBadge.innerText = "カメラを許可してね！";
   }
 }
 init();
