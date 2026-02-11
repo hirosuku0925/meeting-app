@@ -23,7 +23,7 @@ globalStyle.textContent = `
     position: absolute; 
     top: 0; left: 0; width: 100%; height: 100%; 
     background: transparent; 
-    display: none; // ここはHTMLで上書きされる
+    display: none; 
     z-index: 6; 
   }
 
@@ -39,7 +39,7 @@ globalStyle.textContent = `
   .camera-off .name-label { display: block; }
   .camera-off video { opacity: 0; }
 
-  #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; } // ここはHTMLで上書きされる
+  #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; }
   .video-container { position: relative; height: 100%; min-width: 180px; background: #222; border-radius: 8px; overflow: hidden; cursor: pointer; border: 1px solid #333; }
 `;
 document.head.appendChild(globalStyle);
@@ -49,10 +49,9 @@ const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <div style="display: flex; height: 100vh; width: 100%; flex-direction: column;">
     <div id="main-display" style="height: 60vh; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
-      <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain; opacity: 0;"></video>
-      <iframe id="needle-frame" src="https://engine.needle.tools/samples-uploads/facefilter/?" allow="camera; microphone; fullscreen" style="display: block;"></iframe>
-      <div id="needle-guard" style="display: block;"></div> 
-      
+      <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain;"></video>
+      <iframe id="needle-frame" src="https://engine.needle.tools/samples-uploads/facefilter/?" allow="camera; microphone; fullscreen"></iframe>
+      <div id="needle-guard"></div> 
       <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 10;">準備中...</div>
       
       <div id="chat-box" style="display:none; position: absolute; right: 10px; top: 10px; bottom: 10px; width: 220px; background: rgba(30,30,30,0.9); border-radius: 8px; flex-direction: column; border: 1px solid #444; z-index: 100;">
@@ -71,7 +70,7 @@ app.innerHTML = `
       <div class="ctrl-group"><button id="share-btn" class="tool-btn">📺</button><span>画面共有</span></div>
       <div class="ctrl-group"><button id="chat-toggle-btn" class="tool-btn">💬</button><span>チャット</span></div>
       <div class="ctrl-group"><button id="record-btn" class="tool-btn">🔴</button><span>録画</span></div>
-      <div class="ctrl-group"><button id="avatar-btn" class="tool-btn active">🎭</button><span>アバター</span></div>
+      <div class="ctrl-group"><button id="avatar-btn" class="tool-btn">🎭</button><span>アバター</span></div>
       <div class="ctrl-group"><button id="voice-changer-btn" class="tool-btn">🎙️</button><span>ボイス</span></div>
       <input id="name-input" type="text" placeholder="名前" style="background: #222; border: 1px solid #444; color: white; padding: 10px; border-radius: 5px; width: 90px; font-size: 12px;">
       <input id="room-input" type="text" placeholder="部屋名" style="background: #222; border: 1px solid #444; color: white; padding: 10px; border-radius: 5px; width: 90px; font-size: 12px;">
@@ -111,9 +110,7 @@ async function init() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     localVideo.srcObject = localStream;
-    // bigVideo.srcObject はアバターが初期表示されるため、ここでは設定しない
-    // bigVideo.style.opacity はHTMLで0に設定済み
-
+    bigVideo.srcObject = localStream;
     statusBadge.innerText = "準備完了";
 
     (document.querySelector('#name-input') as HTMLInputElement).value = SettingsManager.getUserName();
@@ -165,15 +162,7 @@ function handleCall(call: MediaConnection) {
     v.style.cssText = "height: 100%; width: 100%; object-fit: cover;";
     container.appendChild(v);
     videoGrid.appendChild(container);
-    // 他の参加者の映像をクリックした際、アバター表示をオフにして生映像を表示する
-    container.onclick = () => { 
-        bigVideo.srcObject = stream; 
-        bigVideo.muted = false; 
-        bigVideo.style.opacity = '1'; // 映像を表示
-        needleFrame.style.display = 'none'; // アバターを非表示
-        needleGuard.style.display = 'none'; // ガードパネルを非表示
-        document.querySelector('#avatar-btn')?.classList.remove('active'); // ボタンの状態を非アクティブに
-    };
+    container.onclick = () => { bigVideo.srcObject = stream; bigVideo.muted = false; };
   });
   call.on('close', () => {
     document.getElementById(`container-${call.peer}`)?.remove();
@@ -223,23 +212,13 @@ document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
 
 // アバターボタン（全体ガード連動）
 document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
-  const isOff = needleFrame.style.display === 'none'; // 現在アバターが非表示ならtrue
-
-  if (isOff) { // アバターをONにする場合
-    needleFrame.style.display = 'block';
-    needleGuard.style.display = 'block'; // ガードパネルを出す
-    bigVideo.style.opacity = '0'; // 自分のビデオ映像を非表示
-    // 自分のストリームを bigVideo.srcObject に設定すると、
-    // アバターが上に重なる形になる
-    bigVideo.srcObject = localStream; // 自分の映像を設定（非表示だが音声は必要）
-    (e.currentTarget as HTMLElement).classList.add('active');
-  } else { // アバターをOFFにする場合
-    needleFrame.style.display = 'none';
-    needleGuard.style.display = 'none'; // ガードパネルを隠す
-    bigVideo.style.opacity = '1'; // 自分のビデオ映像を表示
-    bigVideo.srcObject = localStream; // 自分の映像を表示
-    (e.currentTarget as HTMLElement).classList.remove('active');
-  }
+  const isOff = needleFrame.style.display === 'none' || needleFrame.style.display === '';
+  
+  needleFrame.style.display = isOff ? 'block' : 'none';
+  needleGuard.style.display = isOff ? 'block' : 'none'; // ガードパネルを出す
+  
+  bigVideo.style.opacity = isOff ? '0' : '1';
+  (e.currentTarget as HTMLElement).classList.toggle('active', isOff);
 });
 
 // チャット送信
