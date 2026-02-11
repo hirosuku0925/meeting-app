@@ -1,199 +1,164 @@
 import './style.css'
-import { Peer, type MediaConnection, type DataConnection } from 'peerjs'
-import voiceChangerManager from './voice-changer-manager'
-import { setupVoiceChangerButtonHandler } from './voice-changer-dialog'
-import { setupFaceAvatarButtonHandler } from './face-image-avatar-dialog'
-import SettingsManager from './settings-manager'
+import { Peer, type MediaConnection } from 'peerjs'
 
 /* ===============================
-   1. スタイル
+   UI
 ================================ */
-const globalStyle = document.createElement('style');
-globalStyle.textContent = `
-*{box-sizing:border-box;margin:0;padding:0;}
-body,html{width:100%;height:100%;overflow:hidden;background:#000;color:white;font-family:sans-serif;}
-.tool-btn{background:#333;border:none;color:white;font-size:18px;width:45px;height:45px;border-radius:50%;cursor:pointer;transition:.2s;display:flex;align-items:center;justify-content:center;}
-.tool-btn:hover{background:#444;transform:scale(1.1);}
-.ctrl-group{display:flex;flex-direction:column;align-items:center;font-size:10px;color:#888;gap:4px;}
-.off{background:#ea4335!important;}
-.active{background:#4facfe!important;}
-.chat-msg{margin-bottom:5px;word-break:break-all;}
-.chat-msg.me{color:#4facfe;}
-.video-container{position:relative;height:100%;min-width:180px;background:#222;border-radius:8px;overflow:hidden;cursor:pointer;border:1px solid #333;}
-.name-label{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:24px;font-weight:bold;color:white;display:none;z-index:2;text-shadow:0 0 10px rgba(0,0,0,.8);}
-.camera-off .name-label{display:block;}
-.camera-off video{opacity:0;}
-#needle-frame{position:absolute;top:0;left:0;width:100%;height:100%;border:none;display:none;z-index:5;}
-#needle-guard{position:absolute;top:0;left:0;width:100%;height:100%;display:none;z-index:6;}
-`;
-document.head.appendChild(globalStyle);
-
-/* ===============================
-   2. HTML（削らない元構造）
-================================ */
-const app = document.querySelector<HTMLDivElement>('#app')!;
-app.innerHTML = `
-<div style="display:flex;height:100vh;width:100%;flex-direction:column;">
-  <div id="main-display" style="height:60vh;position:relative;background:#1a1a1a;display:flex;align-items:center;justify-content:center;">
-    <video id="big-video" autoplay playsinline muted style="width:100%;height:100%;object-fit:contain;"></video>
-    <iframe id="needle-frame" src="https://engine.needle.tools/samples-uploads/facefilter/?" allow="camera; microphone; fullscreen"></iframe>
-    <div id="needle-guard"></div>
-    <div id="status-badge" style="position:absolute;top:15px;left:15px;background:rgba(0,0,0,0.7);padding:5px 15px;border-radius:20px;border:1px solid #4facfe;font-size:12px;z-index:10;">準備中...</div>
+document.body.innerHTML = `
+<div style="display:flex;height:100vh;flex-direction:column;background:#000;color:#fff;font-family:sans-serif;">
+  <div style="flex:1;display:flex;align-items:center;justify-content:center;position:relative;">
+    <video id="main-video" autoplay playsinline muted style="width:100%;height:100%;object-fit:contain;"></video>
   </div>
-
-  <div id="toolbar" style="height:100px;background:#111;display:flex;align-items:center;justify-content:center;gap:12px;">
-    <div class="ctrl-group"><button id="mic-btn" class="tool-btn">🎤</button><span>マイク</span></div>
-    <div class="ctrl-group"><button id="cam-btn" class="tool-btn">📹</button><span>カメラ</span></div>
-    <div class="ctrl-group"><button id="share-btn" class="tool-btn">📺</button><span>画面共有</span></div>
-    <div class="ctrl-group"><button id="record-btn" class="tool-btn">🔴</button><span>録画</span></div>
-    <div class="ctrl-group"><button id="avatar-btn" class="tool-btn">🎭</button><span>アバター</span></div>
-    <div class="ctrl-group"><button id="voice-changer-btn" class="tool-btn">🎙️</button><span>ボイス</span></div>
-    <input id="name-input" placeholder="名前">
-    <input id="room-input" placeholder="部屋名">
-    <button id="join-btn">参加</button>
-    <button id="exit-btn">終了</button>
+  <div style="height:90px;background:#111;display:flex;align-items:center;justify-content:center;gap:10px;">
+    <button id="mic">🎤</button>
+    <button id="cam">📹</button>
+    <button id="avatar">🎭</button>
+    <input id="room" placeholder="部屋名">
+    <button id="join">参加</button>
   </div>
-
-  <div id="video-grid" style="flex:1;background:#000;display:flex;gap:10px;padding:10px;">
-    <div id="local-container" class="video-container">
-      <video id="local-video" autoplay playsinline muted style="height:100%;width:100%;object-fit:cover;"></video>
-      <div id="local-name-label" class="name-label"></div>
-    </div>
-  </div>
+  <div id="remotes" style="display:flex;gap:10px;padding:10px;background:#000;"></div>
 </div>
-`;
+`
+
+const mainVideo = document.getElementById("main-video") as HTMLVideoElement
+const remoteArea = document.getElementById("remotes") as HTMLDivElement
 
 /* ===============================
-   3. DOM取得（必ずHTMLの後）
+   変数
 ================================ */
-const bigVideo = document.querySelector<HTMLVideoElement>('#big-video')!;
-const localVideo = document.querySelector<HTMLVideoElement>('#local-video')!;
-const micBtn = document.querySelector<HTMLButtonElement>('#mic-btn')!;
-const camBtn = document.querySelector<HTMLButtonElement>('#cam-btn')!;
-const shareBtn = document.querySelector<HTMLButtonElement>('#share-btn')!;
-const recordBtn = document.querySelector<HTMLButtonElement>('#record-btn')!;
-const needleFrame = document.querySelector<HTMLIFrameElement>('#needle-frame')!;
-const needleGuard = document.querySelector<HTMLDivElement>('#needle-guard')!;
-const localContainer = document.querySelector('#local-container')!;
-const localNameLabel = document.querySelector('#local-name-label')!;
+let localStream: MediaStream
+let currentStream: MediaStream
+let avatarStream: MediaStream | null = null
+let peer: Peer | null = null
+const calls = new Map<string, MediaConnection>()
 
 /* ===============================
-   4. 変数
+   カメラ取得
 ================================ */
-let localStream: MediaStream;
-let screenStream: MediaStream | null = null;
-let recorder: MediaRecorder | null = null;
-let recordedChunks: BlobPart[] = [];
-let peer: Peer | null = null;
-let myName = "ゲスト";
-const mediaConnections = new Map<string, MediaConnection>();
-
-/* ===============================
-   5. 初期化
-================================ */
-async function init() {
-  localStream = await navigator.mediaDevices.getUserMedia({ video:true, audio:true });
-  localVideo.srcObject = localStream;
-  bigVideo.srcObject = localStream;
-  setupFaceAvatarButtonHandler('avatar-btn');
-  setupVoiceChangerButtonHandler();
+async function initCamera() {
+  localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+  currentStream = localStream
+  mainVideo.srcObject = localStream
 }
+initCamera()
 
 /* ===============================
-   6. ストリーム差し替え
+   アバター（Canvas加工）
 ================================ */
-function replaceStream(stream: MediaStream){
-  mediaConnections.forEach(call=>{
-    call.peerConnection.getSenders().forEach(sender=>{
-      const track = stream.getTracks().find(t=>t.kind===sender.track?.kind);
-      if(track) sender.replaceTrack(track);
-    });
-  });
-}
+function startAvatar() {
+  const canvas = document.createElement("canvas")
+  canvas.width = 640
+  canvas.height = 480
+  const ctx = canvas.getContext("2d")!
 
-/* ===============================
-   7. UI
-================================ */
+  const video = document.createElement("video")
+  video.srcObject = localStream
+  video.play()
 
-// 🎤
-micBtn.onclick = ()=>{
-  const track = localStream.getAudioTracks()[0];
-  track.enabled = !track.enabled;
-  micBtn.classList.toggle('off',!track.enabled);
-};
+  function draw() {
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
 
-// 📹
-camBtn.onclick = ()=>{
-  const track = localStream.getVideoTracks()[0];
-  track.enabled = !track.enabled;
-  camBtn.classList.toggle('off',!track.enabled);
-  localContainer.classList.toggle('camera-off',!track.enabled);
-  localNameLabel.textContent = myName;
-};
+    // 簡易アバター表示
+    ctx.fillStyle = "rgba(0,0,0,0.5)"
+    ctx.fillRect(0, 350, 640, 130)
+    ctx.fillStyle = "white"
+    ctx.font = "40px sans-serif"
+    ctx.fillText("AVATAR MODE 😎", 150, 430)
 
-// 📺
-shareBtn.onclick = async ()=>{
-  if(!screenStream){
-    screenStream = await navigator.mediaDevices.getDisplayMedia({video:true});
-    bigVideo.srcObject = screenStream;
-    replaceStream(screenStream);
-    shareBtn.classList.add('active');
-    screenStream.getVideoTracks()[0].onended = stopShare;
-  }else{
-    stopShare();
+    requestAnimationFrame(draw)
   }
-};
+  draw()
 
-function stopShare(){
-  screenStream?.getTracks().forEach(t=>t.stop());
-  screenStream=null;
-  bigVideo.srcObject=localStream;
-  replaceStream(localStream);
-  shareBtn.classList.remove('active');
+  avatarStream = canvas.captureStream(30)
+
+  // 音声追加
+  localStream.getAudioTracks().forEach(track => {
+    avatarStream!.addTrack(track)
+  })
+
+  switchStream(avatarStream)
 }
 
-// 🔴
-recordBtn.onclick=()=>{
-  if(!recorder){
-    recorder = new MediaRecorder(screenStream||localStream);
-    recorder.ondataavailable=e=>recordedChunks.push(e.data);
-    recorder.onstop=()=>{
-      const blob=new Blob(recordedChunks,{type:'video/webm'});
-      const url=URL.createObjectURL(blob);
-      const a=document.createElement('a');
-      a.href=url;
-      a.download=`record-${Date.now()}.webm`;
-      a.click();
-      recordedChunks=[];
-    };
-    recorder.start();
-    recordBtn.classList.add('active');
-  }else{
-    recorder.stop();
-    recorder=null;
-    recordBtn.classList.remove('active');
-  }
-};
+function stopAvatar() {
+  if (!avatarStream) return
+  switchStream(localStream)
+  avatarStream.getTracks().forEach(t => t.stop())
+  avatarStream = null
+}
 
-// 🎭 Needle
-document.querySelector('#avatar-btn')!.addEventListener('click',(e)=>{
-  const isOn = needleFrame.style.display==='block';
-  needleFrame.style.display=isOn?'none':'block';
-  needleGuard.style.display=isOn?'none':'block';
-  bigVideo.style.opacity=isOn?'1':'0';
-  (e.currentTarget as HTMLElement).classList.toggle('active',!isOn);
-});
+/* ===============================
+   ストリーム切替
+================================ */
+function switchStream(stream: MediaStream) {
+  currentStream = stream
+  mainVideo.srcObject = stream
 
-// 🚀 参加
-document.querySelector('#join-btn')!.addEventListener('click',()=>{
-  myName=(document.querySelector('#name-input') as HTMLInputElement).value||"名無し";
-  const room=(document.querySelector('#room-input') as HTMLInputElement).value;
-  if(!room)return alert("部屋名を入れてね");
-  if(peer)peer.destroy();
-  peer=new Peer(`vFINAL-${room}-${Math.floor(Math.random()*1000)}`);
-});
+  calls.forEach(call => {
+    const pc = (call as any).peerConnection
+    pc.getSenders().forEach((sender: RTCRtpSender) => {
+      const track = stream.getTracks().find(t => t.kind === sender.track?.kind)
+      if (track) sender.replaceTrack(track)
+    })
+  })
+}
 
-// ❌
-document.querySelector('#exit-btn')!.addEventListener('click',()=>location.reload());
+/* ===============================
+   Peer接続
+================================ */
+function joinRoom(room: string) {
+  if (peer) peer.destroy()
 
-init();
+  peer = new Peer(room + "-" + Math.floor(Math.random() * 10000))
+
+  peer.on("open", id => {
+    console.log("My ID:", id)
+  })
+
+  peer.on("call", call => {
+    call.answer(currentStream)
+    handleCall(call)
+  })
+}
+
+function handleCall(call: MediaConnection) {
+  calls.set(call.peer, call)
+
+  call.on("stream", stream => {
+    const video = document.createElement("video")
+    video.srcObject = stream
+    video.autoplay = true
+    video.playsInline = true
+    video.style.width = "200px"
+    remoteArea.appendChild(video)
+  })
+
+  call.on("close", () => {
+    calls.delete(call.peer)
+  })
+}
+
+/* ===============================
+   UIイベント
+================================ */
+
+document.getElementById("mic")!.onclick = () => {
+  const track = localStream.getAudioTracks()[0]
+  track.enabled = !track.enabled
+}
+
+document.getElementById("cam")!.onclick = () => {
+  const track = localStream.getVideoTracks()[0]
+  track.enabled = !track.enabled
+}
+
+let avatarOn = false
+document.getElementById("avatar")!.onclick = () => {
+  avatarOn = !avatarOn
+  avatarOn ? startAvatar() : stopAvatar()
+}
+
+document.getElementById("join")!.onclick = () => {
+  const room = (document.getElementById("room") as HTMLInputElement).value
+  if (!room) return alert("部屋名を入れてね")
+  joinRoom(room)
+}
