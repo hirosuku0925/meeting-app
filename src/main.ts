@@ -1,9 +1,9 @@
-import './style.css'
-import { Peer, type MediaConnection, type DataConnection } from 'peerjs'
-import voiceChangerManager from './voice-changer-manager'
-import { setupVoiceChangerButtonHandler } from './voice-changer-dialog'
-import { setupFaceAvatarButtonHandler } from './face-image-avatar-dialog'
-import SettingsManager from './settings-manager'
+import './style.css';
+import { Peer, type MediaConnection, type DataConnection } from 'peerjs';
+import voiceChangerManager from './voice-changer-manager';
+import { setupVoiceChangerButtonHandler } from './voice-changer-dialog';
+import { setupFaceAvatarButtonHandler } from './face-image-avatar-dialog';
+import SettingsManager from './settings-manager';
 
 // --- 1. スタイル設定 ---
 const globalStyle = document.createElement('style');
@@ -17,7 +17,7 @@ globalStyle.textContent = `
   .active { background: #4facfe !important; }
   .chat-msg { margin-bottom: 5px; word-break: break-all; }
   .chat-msg.me { color: #4facfe; }
-  
+
   /* 画面全体のガードパネル（透明な壁） */
   #needle-guard { 
     position: absolute; 
@@ -149,6 +149,7 @@ function tryNextSeat(roomKey: string, seat: number) {
   peer.on('error', (err) => { if (err.type === 'unavailable-id') tryNextSeat(roomKey, seat + 1); });
 }
 
+// --- 6. 他の参加者にストリームを表示 ---
 function handleCall(call: MediaConnection) {
   if (connectedPeers.has(call.peer)) return;
   connectedPeers.add(call.peer);
@@ -170,15 +171,7 @@ function handleCall(call: MediaConnection) {
   });
 }
 
-function handleDataConnection(conn: DataConnection) {
-  dataConnections.set(conn.peer, conn);
-  conn.on('data', (data: any) => { if (data && data.name) appendMessage(data.name, data.message); });
-  conn.on('close', () => dataConnections.delete(conn.peer));
-}
-
-// --- 6. イベント設定 ---
-
-// 参加ボタン
+// --- 7. 参加ボタン ---
 document.querySelector('#join-btn')?.addEventListener('click', () => {
   const room = (document.querySelector('#room-input') as HTMLInputElement).value.trim();
   myName = (document.querySelector('#name-input') as HTMLInputElement).value.trim() || "名無し";
@@ -190,7 +183,7 @@ document.querySelector('#join-btn')?.addEventListener('click', () => {
   tryNextSeat(`vFINAL-${room}`, 1);
 });
 
-// 終了ボタン
+// --- 8. 終了ボタン ---
 document.querySelector('#exit-btn')?.addEventListener('click', () => location.reload());
 
 // カメラボタン（名前表示連動）
