@@ -1,0 +1,6 @@
+assets
+dist
+src/generated
+include/**/*
+include/poster.webp
+node_modules
