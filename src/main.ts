@@ -17,12 +17,23 @@ globalStyle.textContent = `
   .active { background: #4facfe !important; }
   .chat-msg { margin-bottom: 5px; word-break: break-all; }
   .chat-msg.me { color: #4facfe; }
+  
   #needle-guard { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: transparent; display: none; z-index: 6; }
-  .name-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; font-weight: bold; color: white; display: none; z-index: 2; text-shadow: 0 0 10px rgba(0,0,0,0.8); pointer-events: none; white-space: nowrap; }
-  .camera-off .name-label { display: block; }
+
+  .name-label {
+    position: absolute;
+    bottom: 10px; left: 10px;
+    background: rgba(0,0,0,0.5);
+    padding: 2px 8px; border-radius: 4px;
+    font-size: 12px; color: white;
+    z-index: 3; pointer-events: none;
+  }
+  
+  .video-container { position: relative; height: 100%; min-width: 200px; background: #222; border-radius: 8px; overflow: hidden; cursor: pointer; border: 1px solid #333; flex-shrink: 0; }
   .camera-off video { opacity: 0; }
+  .camera-off::after { content: "📷 OFF"; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #666; font-weight: bold; }
+
   #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; }
-  .video-container { position: relative; height: 100%; min-width: 180px; background: #222; border-radius: 8px; overflow: hidden; cursor: pointer; border: 1px solid #333; flex-shrink: 0; }
 `;
 document.head.appendChild(globalStyle);
 
@@ -35,6 +46,7 @@ app.innerHTML = `
       <iframe id="needle-frame" src="https://engine.needle.tools/samples-uploads/facefilter/?" allow="camera; microphone; fullscreen"></iframe>
       <div id="needle-guard"></div> 
       <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 10;">準備中...</div>
+      
       <div id="chat-box" style="display:none; position: absolute; right: 10px; top: 10px; bottom: 10px; width: 220px; background: rgba(30,30,30,0.9); border-radius: 8px; flex-direction: column; border: 1px solid #444; z-index: 100;">
         <div style="padding: 8px; border-bottom: 1px solid #444; font-size: 12px; font-weight: bold;">チャット</div>
         <div id="chat-messages" style="flex: 1; overflow-y: auto; padding: 10px; font-size: 11px;"></div>
@@ -44,6 +56,7 @@ app.innerHTML = `
         </div>
       </div>
     </div>
+
     <div id="toolbar" style="height: 100px; background: #111; display: flex; align-items: center; justify-content: center; gap: 12px; border-top: 1px solid #333; flex-shrink: 0; padding: 0 10px;">
       <div class="ctrl-group"><button id="mic-btn" class="tool-btn">🎤</button><span>マイク</span></div>
       <div class="ctrl-group"><button id="cam-btn" class="tool-btn">📹</button><span>カメラ</span></div>
@@ -57,10 +70,11 @@ app.innerHTML = `
       <button id="join-btn" style="background: #2ecc71; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-weight: bold;">参加</button>
       <button id="exit-btn" style="background: #ea4335; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer;">終了</button>
     </div>
+
     <div id="video-grid" style="flex: 1; background: #000; display: flex; gap: 10px; padding: 10px; overflow-x: auto; align-items: center; justify-content: flex-start;">
       <div id="local-container" class="video-container">
         <video id="local-video" autoplay playsinline muted style="height: 100%; width: 100%; object-fit: cover;"></video>
-        <div id="local-name-label" class="name-label"></div>
+        <div id="local-name-label" class="name-label">自分</div>
       </div>
     </div>
   </div>
@@ -77,111 +91,117 @@ const needleFrame = document.querySelector<HTMLIFrameElement>('#needle-frame')!;
 const needleGuard = document.querySelector<HTMLDivElement>('#needle-guard')!;
 
 let localStream: MediaStream;
+let screenStream: MediaStream | null = null;
 let peer: Peer | null = null;
 let myName = "ゲスト";
+const connectedPeers = new Set<string>();
 const dataConnections = new Map<string, DataConnection>();
 
 // --- 4. 初期化 ---
 async function init() {
+  if (localStream) return;
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     localVideo.srcObject = localStream;
     bigVideo.srcObject = localStream;
     statusBadge.innerText = "準備完了";
 
-    (document.querySelector('#name-input') as HTMLInputElement).value = SettingsManager.getUserName();
-    (document.querySelector('#room-input') as HTMLInputElement).value = SettingsManager.getLastRoomName();
+    (document.querySelector('#name-input') as HTMLInputElement).value = SettingsManager.getUserName() || "";
+    (document.querySelector('#room-input') as HTMLInputElement).value = SettingsManager.getLastRoomName() || "";
 
     setupFaceAvatarButtonHandler('avatar-btn');
     setupVoiceChangerButtonHandler();
   } catch (e) { statusBadge.innerText = "カメラを許可してください"; }
 }
 
-// --- 5. 接続ロジック（ここが修正ポイント） ---
-function joinRoom(roomKey: string, seat: number) {
-  if (peer) peer.destroy();
-  
-  peer = new Peer(`${roomKey}-${seat}`);
+// --- 5. 接続・通信ロジック ---
+function tryNextSeat(roomKey: string, seat: number) {
+  if (peer) { peer.destroy(); peer = null; }
+  const myPeerId = `${roomKey}-${seat}`;
+  peer = new Peer(myPeerId);
 
   peer.on('open', (id) => {
-    statusBadge.innerText = `参加中: ${id}`;
+    statusBadge.innerText = `入室中: 席${seat}`;
     
-    // 自分より前の番号(1〜seat-1)の全員に接続を試みる
-    for (let i = 1; i < seat; i++) {
+    // 1番から10番までの席をスキャンして接続を試みる（3人目以降も見えるように）
+    for (let i = 1; i <= 10; i++) {
       const targetId = `${roomKey}-${i}`;
-      connectToPeer(targetId);
+      if (targetId === id) continue;
+
+      setTimeout(() => {
+        if (!peer || peer.destroyed || connectedPeers.has(targetId)) return;
+        
+        // データ送信用の接続
+        const conn = peer.connect(targetId);
+        if (conn) handleDataConnection(conn);
+
+        // ビデオ通話の発信（自分の名前を添える）
+        const call = peer.call(targetId, screenStream || localStream, {
+          metadata: { userName: myName }
+        });
+        if (call) handleCall(call);
+      }, i * 300); // 接続の衝突を防ぐため少しずつずらす
     }
   });
 
   peer.on('call', (call) => {
-    call.answer(localStream);
+    call.answer(screenStream || localStream);
     handleCall(call);
   });
 
-  peer.on('connection', (conn) => {
-    handleDataConnection(conn);
-  });
+  peer.on('connection', (conn) => handleDataConnection(conn));
 
   peer.on('error', (err) => {
-    // 席が埋まっていたら次の席を試す
     if (err.type === 'unavailable-id') {
-      joinRoom(roomKey, seat + 1);
+      tryNextSeat(roomKey, seat + 1);
     } else {
       console.error("Peer Error:", err);
     }
   });
 }
 
-function connectToPeer(targetId: string) {
-  if (!peer) return;
-  
-  // メディア接続（映像・音声）
-  const call = peer.call(targetId, localStream);
-  if (call) handleCall(call);
-
-  // データ接続（チャット）
-  const conn = peer.connect(targetId);
-  if (conn) handleDataConnection(conn);
-}
-
 function handleCall(call: MediaConnection) {
-  call.on('stream', (remoteStream) => {
-    // 既にビデオが表示されている場合は何もしない
+  if (connectedPeers.has(call.peer)) return;
+
+  call.on('stream', (stream) => {
     if (document.getElementById(`container-${call.peer}`)) return;
+    connectedPeers.add(call.peer);
 
     const container = document.createElement('div');
     container.id = `container-${call.peer}`;
     container.className = "video-container";
-    
+
     const v = document.createElement('video');
-    v.srcObject = remoteStream;
+    v.srcObject = stream;
     v.autoplay = true;
     v.playsInline = true;
     v.style.cssText = "height: 100%; width: 100%; object-fit: cover;";
-    
+
+    const label = document.createElement('div');
+    label.className = "name-label";
+    label.innerText = call.metadata?.userName || "参加者";
+
     container.appendChild(v);
+    container.appendChild(label);
     videoGrid.appendChild(container);
 
     container.onclick = () => {
-      bigVideo.srcObject = remoteStream;
+      bigVideo.srcObject = stream;
       bigVideo.muted = false;
     };
   });
 
-  call.on('close', () => removeRemoteVideo(call.peer));
-  call.on('error', () => removeRemoteVideo(call.peer));
-}
-
-function removeRemoteVideo(peerId: string) {
-  const el = document.getElementById(`container-${peerId}`);
-  if (el) el.remove();
+  call.on('close', () => {
+    document.getElementById(`container-${call.peer}`)?.remove();
+    connectedPeers.delete(call.peer);
+  });
 }
 
 function handleDataConnection(conn: DataConnection) {
   dataConnections.set(conn.peer, conn);
   conn.on('data', (data: any) => {
-    if (data && data.message) {
-      appendMessage(data.name || "不明", data.message);
+    if (data && data.type === 'chat') {
+      appendMessage(data.name, data.message);
     }
   });
   conn.on('close', () => dataConnections.delete(conn.peer));
@@ -193,27 +213,40 @@ document.querySelector('#join-btn')?.addEventListener('click', () => {
   const room = (document.querySelector('#room-input') as HTMLInputElement).value.trim();
   myName = (document.querySelector('#name-input') as HTMLInputElement).value.trim() || "名無し";
   if (!room) return alert("部屋名を入れてね");
-  
+
   SettingsManager.setUserName(myName);
   SettingsManager.setLastRoomName(room);
-
-  // 既存の自分以外のビデオを掃除
-  videoGrid.querySelectorAll('.video-container:not(#local-container)').forEach(v => v.remove());
   
-  joinRoom(`vFINAL-${room}`, 1);
+  // 初期化
+  videoGrid.querySelectorAll('.video-container:not(#local-container)').forEach(v => v.remove());
+  connectedPeers.clear();
+  
+  tryNextSeat(`vFINAL-${room}`, 1);
 });
 
 document.querySelector('#exit-btn')?.addEventListener('click', () => location.reload());
+
+document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
+  const track = localStream.getVideoTracks()[0];
+  track.enabled = !track.enabled;
+  const container = document.querySelector('#local-container')!;
+  track.enabled ? container.classList.remove('camera-off') : container.classList.add('camera-off');
+  (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
+});
+
+document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
+  const isOff = needleFrame.style.display === 'none' || needleFrame.style.display === '';
+  needleFrame.style.display = isOff ? 'block' : 'none';
+  needleGuard.style.display = isOff ? 'block' : 'none';
+  bigVideo.style.opacity = isOff ? '0' : '1';
+  (e.currentTarget as HTMLElement).classList.toggle('active', isOff);
+});
 
 document.querySelector('#chat-send-btn')?.addEventListener('click', () => {
   const input = document.querySelector<HTMLInputElement>('#chat-input')!;
   const msg = input.value.trim();
   if (!msg) return;
-  
-  dataConnections.forEach(conn => {
-    conn.send({ name: myName, message: msg });
-  });
-  
+  dataConnections.forEach(conn => conn.send({ type: 'chat', name: myName, message: msg }));
   appendMessage("自分", msg, true);
   input.value = "";
 });
