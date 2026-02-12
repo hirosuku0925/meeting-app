@@ -1,254 +1,245 @@
 import './style.css'
-import { Peer, DataConnection } from 'peerjs'
-import { FaceMesh } from '@mediapipe/face_mesh'
-import { SelfieSegmentation } from '@mediapipe/selfie_segmentation'
-import * as webllm from "@mlc-ai/web-llm"
+import { Peer, type MediaConnection, type DataConnection } from 'peerjs'
+import voiceChangerManager from './voice-changer-manager'
+import { setupVoiceChangerButtonHandler } from './voice-changer-dialog'
+import { setupFaceAvatarButtonHandler } from './face-image-avatar-dialog'
+import SettingsManager from './settings-manager'
 
-// --- 1. UI構築 (これまでのボタンや設定項目をすべて維持) ---
-document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <div style="display: flex; height: 100vh; font-family: sans-serif; overflow: hidden; background: #f0f2f5;">
-    <div style="flex: 1; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto;">
-      <h1 style="color: #333; margin-bottom: 20px;">AIマルチ会議室 @nijinai</h1>
-      <div id="video-grid" style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; padding: 10px; width: 100%;">
-        <div id="local-container" style="text-align: center;">
-          <p style="font-size: 12px; color: #666; margin-bottom: 5px;">自分</p>
-          <canvas id="local-canvas" width="480" height="360" style="width: 280px; border: 3px solid #646cff; border-radius: 15px; background: #222; box-shadow: 0 8px 16px rgba(0,0,0,0.2);"></canvas>
-        </div>
-      </div>
-      <div class="card" style="width: 100%; max-width: 500px; margin-top: 20px; padding: 20px; border-radius: 16px; background: #fff; box-shadow: 0 10px 25px rgba(0,0,0,0.1);">
-        <p id="ai-status" style="font-size: 11px; color: #ff4d97; text-align: center; margin-bottom: 10px;">🤖 AI準備中...</p>
-        <div style="display: flex; gap: 8px; justify-content: center; margin-bottom: 15px; flex-wrap: wrap;">
-          <button id="camera-btn" style="background-color: #2196F3; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">📹 カメラ: ON</button>
-          <button id="mic-btn" style="background-color: #4CAF50; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">🎤 マイク: ON</button>
-          <button id="avatar-mode-btn" style="background-color: #555; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">👤 アバター: OFF</button>
-          <button id="hangup-btn" style="background-color: #f44336; color: white; padding: 10px 15px; border-radius: 8px; border:none; cursor: pointer;">退出</button>
-        </div>
-        <div style="display: flex; gap: 10px; justify-content: center; margin-bottom: 15px; background: #eee; padding: 10px; border-radius: 10px;">
-          <button class="react-btn" data-emoji="👏" style="font-size: 20px; border:none; background:none; cursor:pointer;">👏</button>
-          <button class="react-btn" data-emoji="❤️" style="font-size: 20px; border:none; background:none; cursor:pointer;">❤️</button>
-          <button class="react-btn" data-emoji="😮" style="font-size: 20px; border:none; background:none; cursor:pointer;">😮</button>
-          <button class="react-btn" data-emoji="🔥" style="font-size: 20px; border:none; background:none; cursor:pointer;">🔥</button>
-        </div>
-        <div style="background: #f8f9fa; padding: 15px; border-radius: 12px; text-align: left; margin-bottom: 15px;">
-          <label style="font-size: 11px; font-weight: bold; color: #1976D2;">🏞 背景・アバター設定</label>
-          <input type="file" id="bg-upload" accept="image/*" style="width: 100%; font-size: 10px; margin-top: 5px;">
-          <div style="display: flex; gap: 5px; margin-top: 5px;">
-            <input type="file" id="avatar-close" accept="image/*" title="通常" style="font-size: 9px; width: 33%;">
-            <input type="file" id="avatar-open" accept="image/*" title="口開" style="font-size: 9px; width: 33%;">
-            <input type="file" id="avatar-blink" accept="image/*" title="瞬き" style="font-size: 9px; width: 33%;">
-          </div>
-        </div>
-        <div style="background: #f8f9fa; padding: 15px; border-radius: 12px;">
-          <input type="text" id="user-name-input" placeholder="名前" value="User Name" style="width: 100%; padding: 8px; margin-bottom: 10px; border-radius: 5px; border: 1px solid #ddd;">
-          <div style="display: flex; gap: 10px;">
-             <input id="remote-id-input" type="text" placeholder="入室するIDを入力" style="flex: 2; padding: 8px; border-radius: 5px; border: 1px solid #ddd;">
-             <button id="connect-btn" style="flex: 1; background-color: #646cff; color: white; border-radius: 5px;">入室</button>
-          </div>
-        </div>
-        <p id="status" style="font-size: 12px; color: #1976D2; font-weight: bold; margin-top: 10px; text-align:center;">ID: 取得中...</p>
-      </div>
-    </div>
-    <div style="width: 250px; background: #fff; border-left: 1px solid #ddd; display: flex; flex-direction: column;">
-      <div style="padding: 15px; background: #646cff; color: white; font-weight: bold;">チャット</div>
-      <div id="chat-box" style="flex: 1; overflow-y: auto; padding: 10px; font-size: 13px; display: flex; flex-direction: column; gap: 5px;"></div>
-      <div style="padding: 10px; border-top: 1px solid #eee; display: flex; gap: 5px;">
-        <input type="text" id="chat-input" placeholder="@nijinai 質問してね" style="flex: 1; padding: 5px;">
-        <button id="send-btn" style="background: #646cff; color: white; border: none; padding: 5px 10px; border-radius: 4px;">送信</button>
-      </div>
-    </div>
-    <video id="hidden-video" style="display:none" autoplay playsinline muted></video>
-  </div>
-`
-
-// --- グローバル変数 & 設定 ---
-const canvas = document.querySelector<HTMLCanvasElement>('#local-canvas')!;
-const ctx = canvas.getContext('2d')!;
-const video = document.querySelector<HTMLVideoElement>('#hidden-video')!;
-const chatBox = document.querySelector<HTMLDivElement>('#chat-box')!;
-const statusEl = document.querySelector<HTMLElement>('#status')!;
-const aiStatus = document.getElementById("ai-status")!;
-
-let isMicOn = true, isAvatarMode = false;
-let imgClose: HTMLImageElement | null = null, imgOpen: HTMLImageElement | null = null, imgBlink: HTMLImageElement | null = null, backgroundImg: HTMLImageElement | null = null;
-let processedStream: MediaStream;
-const connections: Set<DataConnection> = new Set();
-let reactions: { emoji: string, time: number }[] = [];
-
-// --- AI (WebLLM) 準備 ---
-let engine: webllm.MLCEngine | null = null;
-async function initAI() {
-  try {
-    engine = new webllm.MLCEngine();
-    engine.setInitProgressCallback((report) => {
-      aiStatus.innerText = `🤖 AI読込中: ${Math.round(report.progress * 100)}%`;
-    });
-    await engine.reload("Llama-3.1-8B-Instruct-q4f16_1-MLC");
-    aiStatus.innerText = "🤖 AI準備完了！ @nijinai と呼んでね";
-  } catch (e) {
-    aiStatus.innerText = "❌ AI起動失敗 (WebGPU非対応)";
-  }
-}
-initAI();
-
-// --- 画像・アバター描画処理 ---
-const selfie = new SelfieSegmentation({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}` });
-selfie.setOptions({ modelSelection: 1 });
-const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
-faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true });
-
-let currentMask: any = null;
-selfie.onResults((res) => { currentMask = res.segmentationMask; });
-
-faceMesh.onResults((res) => {
-  ctx.save();
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (backgroundImg) ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
-  ctx.translate(canvas.width, 0); ctx.scale(-1, 1);
+// --- 1. スタイル設定 ---
+const globalStyle = document.createElement('style');
+globalStyle.textContent = `
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body, html { width: 100%; height: 100%; overflow: hidden; background: #000; color: white; font-family: sans-serif; }
+  .tool-btn { background: #333; border: none; color: white; font-size: 18px; width: 45px; height: 45px; border-radius: 50%; cursor: pointer; transition: 0.2s; display: flex; align-items: center; justify-content: center; }
+  .tool-btn:hover { background: #444; transform: scale(1.1); }
+  .ctrl-group { display: flex; flex-direction: column; align-items: center; font-size: 10px; color: #888; gap: 4px; }
+  .off { background: #ea4335 !important; }
+  .active { background: #4facfe !important; }
+  .chat-msg { margin-bottom: 5px; word-break: break-all; }
+  .chat-msg.me { color: #4facfe; }
   
-  if (res.image) {
-    if (currentMask && backgroundImg && !isAvatarMode) {
-      const offCanvas = document.createElement('canvas'); offCanvas.width = 480; offCanvas.height = 360;
-      const offCtx = offCanvas.getContext('2d')!;
-      offCtx.drawImage(currentMask, 0, 0, 480, 360);
-      offCtx.globalCompositeOperation = 'source-in'; offCtx.drawImage(res.image, 0, 0, 480, 360);
-      ctx.drawImage(offCanvas, 0, 0, canvas.width, canvas.height);
-    } else {
-      ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
-    }
+  /* 画面全体のガードパネル（透明な壁） */
+  #needle-guard { 
+    position: absolute; 
+    top: 0; left: 0; width: 100%; height: 100%; 
+    background: transparent; 
+    display: none; 
+    z-index: 6; 
   }
 
-  if (res.multiFaceLandmarks?.[0]) {
-    const landmarks = res.multiFaceLandmarks[0];
-    const centerX = landmarks[1].x * canvas.width, centerY = landmarks[1].y * canvas.height;
-    const radius = ((landmarks[454].x - landmarks[234].x) * canvas.width * 1.8) / 2;
-
-    if (isAvatarMode && imgClose && imgOpen) {
-      const isMouthOpen = Math.abs(landmarks[13].y - landmarks[14].y) > 0.025;
-      const isBlinking = Math.abs(landmarks[159].y - landmarks[145].y) < 0.012;
-      ctx.save(); ctx.beginPath(); ctx.arc(centerX, centerY, radius, 0, Math.PI * 2); ctx.clip();
-      let targetImg = (isBlinking && imgBlink) ? imgBlink : (isMouthOpen && isMicOn ? imgOpen : imgClose);
-      ctx.drawImage(targetImg, centerX - radius, centerY - radius, radius * 2, radius * 2); ctx.restore();
-    }
-
-    const now = Date.now();
-    reactions = reactions.filter(r => now - r.time < 2000);
-    reactions.forEach((r, i) => {
-      ctx.save(); ctx.scale(-1, 1); ctx.font = "40px serif"; ctx.textAlign = "center";
-      ctx.fillText(r.emoji, -centerX, centerY - radius - 20 - (i * 40)); 
-      ctx.restore();
-    });
+  /* カメラOFF時の名前表示用 */
+  .name-label {
+    position: absolute;
+    top: 50%; left: 50%; transform: translate(-50%, -50%);
+    font-size: 24px; font-weight: bold; color: white;
+    display: none; z-index: 2; text-shadow: 0 0 10px rgba(0,0,0,0.8);
+    pointer-events: none;
+    white-space: nowrap;
   }
-  ctx.restore();
-});
+  .camera-off .name-label { display: block; }
+  .camera-off video { opacity: 0; }
 
-// --- チャット・通信処理 ---
-function addChatMessage(name: string, content: string, color: string = "#333") {
-  const p = document.createElement('p');
-  p.innerHTML = `<b style="color:${color}">${name}:</b> ${content}`;
-  chatBox.appendChild(p);
-  chatBox.scrollTop = chatBox.scrollHeight;
+  #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; }
+  .video-container { position: relative; height: 100%; min-width: 180px; background: #222; border-radius: 8px; overflow: hidden; cursor: pointer; border: 1px solid #333; }
+`;
+document.head.appendChild(globalStyle);
+
+// --- 2. HTML構造 ---
+const app = document.querySelector<HTMLDivElement>('#app')!;
+app.innerHTML = `
+  <div style="display: flex; height: 100vh; width: 100%; flex-direction: column;">
+    <div id="main-display" style="height: 60vh; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
+      <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain;"></video>
+      <iframe id="needle-frame" src="https://engine.needle.tools/samples-uploads/facefilter/?" allow="camera; microphone; fullscreen"></iframe>
+      <div id="needle-guard"></div> 
+      <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 10;">準備中...</div>
+      
+      <div id="chat-box" style="display:none; position: absolute; right: 10px; top: 10px; bottom: 10px; width: 220px; background: rgba(30,30,30,0.9); border-radius: 8px; flex-direction: column; border: 1px solid #444; z-index: 100;">
+        <div style="padding: 8px; border-bottom: 1px solid #444; font-size: 12px; font-weight: bold;">チャット</div>
+        <div id="chat-messages" style="flex: 1; overflow-y: auto; padding: 10px; font-size: 11px;"></div>
+        <div style="padding: 8px; display: flex; gap: 5px;">
+          <input id="chat-input" type="text" placeholder="メッセージ..." style="flex: 1; background: #222; border: 1px solid #555; color: white; border-radius: 4px; padding: 5px; font-size: 11px;">
+          <button id="chat-send-btn" style="background: #4facfe; border: none; color: white; padding: 5px; border-radius: 4px; font-size: 11px; cursor:pointer;">送信</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toolbar" style="height: 100px; background: #111; display: flex; align-items: center; justify-content: center; gap: 12px; border-top: 1px solid #333; flex-shrink: 0; padding: 0 10px;">
+      <div class="ctrl-group"><button id="mic-btn" class="tool-btn">🎤</button><span>マイク</span></div>
+      <div class="ctrl-group"><button id="cam-btn" class="tool-btn">📹</button><span>カメラ</span></div>
+      <div class="ctrl-group"><button id="share-btn" class="tool-btn">📺</button><span>画面共有</span></div>
+      <div class="ctrl-group"><button id="chat-toggle-btn" class="tool-btn">💬</button><span>チャット</span></div>
+      <div class="ctrl-group"><button id="record-btn" class="tool-btn">🔴</button><span>録画</span></div>
+      <div class="ctrl-group"><button id="avatar-btn" class="tool-btn">🎭</button><span>アバター</span></div>
+      <div class="ctrl-group"><button id="voice-changer-btn" class="tool-btn">🎙️</button><span>ボイス</span></div>
+      <input id="name-input" type="text" placeholder="名前" style="background: #222; border: 1px solid #444; color: white; padding: 10px; border-radius: 5px; width: 90px; font-size: 12px;">
+      <input id="room-input" type="text" placeholder="部屋名" style="background: #222; border: 1px solid #444; color: white; padding: 10px; border-radius: 5px; width: 90px; font-size: 12px;">
+      <button id="join-btn" style="background: #2ecc71; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-weight: bold;">参加</button>
+      <button id="exit-btn" style="background: #ea4335; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer;">終了</button>
+    </div>
+
+    <div id="video-grid" style="flex: 1; background: #000; display: flex; gap: 10px; padding: 10px; overflow-x: auto; align-items: center; justify-content: center;">
+      <div id="local-container" class="video-container">
+        <video id="local-video" autoplay playsinline muted style="height: 100%; width: 100%; object-fit: cover;"></video>
+        <div id="local-name-label" class="name-label"></div>
+      </div>
+    </div>
+  </div>
+`;
+
+// --- 3. 変数管理 ---
+const bigVideo = document.querySelector<HTMLVideoElement>('#big-video')!;
+const localVideo = document.querySelector<HTMLVideoElement>('#local-video')!;
+const videoGrid = document.querySelector<HTMLDivElement>('#video-grid')!;
+const statusBadge = document.querySelector<HTMLDivElement>('#status-badge')!;
+const chatBox = document.querySelector<HTMLDivElement>('#chat-box')!;
+const chatMessages = document.querySelector<HTMLDivElement>('#chat-messages')!;
+const needleFrame = document.querySelector<HTMLIFrameElement>('#needle-frame')!;
+const needleGuard = document.querySelector<HTMLDivElement>('#needle-guard')!;
+
+let localStream: MediaStream;
+let screenStream: MediaStream | null = null;
+let peer: Peer | null = null;
+let myName = "ゲスト";
+const connectedPeers = new Set<string>();
+const dataConnections = new Map<string, DataConnection>();
+
+// --- 4. 初期化 ---
+async function init() {
+  if (localStream) return;
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    localVideo.srcObject = localStream;
+    bigVideo.srcObject = localStream;
+    statusBadge.innerText = "準備完了";
+
+    (document.querySelector('#name-input') as HTMLInputElement).value = SettingsManager.getUserName();
+    (document.querySelector('#room-input') as HTMLInputElement).value = SettingsManager.getLastRoomName();
+
+    setupFaceAvatarButtonHandler('avatar-btn');
+    setupVoiceChangerButtonHandler();
+  } catch (e) { statusBadge.innerText = "カメラを許可してください"; }
 }
 
-const peer = new Peer();
-peer.on('open', (id) => statusEl.innerText = `あなたのID: ${id}`);
+// --- 5. 接続・通信ロジック（PeerJS） ---
+function tryNextSeat(roomKey: string, seat: number) {
+  if (peer) { peer.destroy(); peer = null; }
+  peer = new Peer(`${roomKey}-${seat}`);
 
-const setupConn = (conn: DataConnection) => {
-  connections.add(conn);
-  conn.on('data', (data: any) => {
-    if (data.type === 'chat') addChatMessage(data.name, data.content, data.name === 'nijinai' ? '#ff4d97' : '#333');
-    if (data.type === 'reaction') reactions.push({ emoji: data.content, time: Date.now() });
+  peer.on('open', () => {
+    statusBadge.innerText = `席${seat}で接続中...`;
+    setTimeout(() => {
+      if (!peer) return;
+      for (let i = 1; i < seat; i++) {
+        const targetId = `${roomKey}-${i}`;
+        if (!connectedPeers.has(targetId)) {
+          const call = peer.call(targetId, screenStream || localStream);
+          if (call) handleCall(call);
+          const conn = peer.connect(targetId);
+          if (conn) handleDataConnection(conn);
+        }
+      }
+    }, 1000);
   });
-};
+  peer.on('call', (call) => {
+    call.answer(screenStream || localStream);
+    handleCall(call);
+  });
+  peer.on('connection', (conn) => handleDataConnection(conn));
+  peer.on('error', (err) => { if (err.type === 'unavailable-id') tryNextSeat(roomKey, seat + 1); });
+}
 
-peer.on('connection', setupConn);
-peer.on('call', (call) => {
-  call.answer(processedStream);
+function handleCall(call: MediaConnection) {
+  if (connectedPeers.has(call.peer)) return;
+  connectedPeers.add(call.peer);
   call.on('stream', (stream) => {
-    if (document.getElementById(`remote-${call.peer}`)) return;
-    const div = document.createElement('div'); div.id = `remote-${call.peer}`;
-    const v = document.createElement('video'); v.style.width = "280px"; v.style.borderRadius = "15px"; v.srcObject = stream; v.autoplay = true; v.playsInline = true;
-    div.appendChild(v); document.querySelector('#video-grid')!.appendChild(div);
+    if (document.getElementById(`container-${call.peer}`)) return;
+    const container = document.createElement('div');
+    container.id = `container-${call.peer}`;
+    container.className = "video-container";
+    const v = document.createElement('video');
+    v.srcObject = stream; v.autoplay = true; v.playsInline = true;
+    v.style.cssText = "height: 100%; width: 100%; object-fit: cover;";
+    container.appendChild(v);
+    videoGrid.appendChild(container);
+    container.onclick = () => { bigVideo.srcObject = stream; bigVideo.muted = false; };
   });
+  call.on('close', () => {
+    document.getElementById(`container-${call.peer}`)?.remove();
+    connectedPeers.delete(call.peer);
+  });
+}
+
+function handleDataConnection(conn: DataConnection) {
+  dataConnections.set(conn.peer, conn);
+  conn.on('data', (data: any) => { if (data && data.name) appendMessage(data.name, data.message); });
+  conn.on('close', () => dataConnections.delete(conn.peer));
+}
+
+// --- 6. イベント設定 ---
+
+// 参加ボタン
+document.querySelector('#join-btn')?.addEventListener('click', () => {
+  const room = (document.querySelector('#room-input') as HTMLInputElement).value.trim();
+  myName = (document.querySelector('#name-input') as HTMLInputElement).value.trim() || "名無し";
+  if (!room) return alert("部屋名を入れてね");
+  SettingsManager.setUserName(myName);
+  SettingsManager.setLastRoomName(room);
+  videoGrid.querySelectorAll('.video-container:not(#local-container)').forEach(v => v.remove());
+  connectedPeers.clear();
+  tryNextSeat(`vFINAL-${room}`, 1);
 });
 
-document.querySelector('#send-btn')?.addEventListener('click', async () => {
-  const input = document.querySelector<HTMLInputElement>('#chat-input')!;
-  const name = (document.querySelector<HTMLInputElement>('#user-name-input')!).value;
-  if (!input.value) return;
+// 終了ボタン
+document.querySelector('#exit-btn')?.addEventListener('click', () => location.reload());
 
-  const msg = input.value;
-  addChatMessage("自分", msg);
-  connections.forEach(c => c.send({ type: 'chat', name, content: msg }));
-
-  // AI反応セクション
-  if (msg.includes("@nijinai") && engine) {
-    const messages: any[] = [
-      { role: "system", content: "あなたはnijinaiという猫です。語尾に『にゃ』を付けて、短く可愛く答えて。" },
-      { role: "user", content: msg.replace("@nijinai", "") }
-    ];
-    try {
-      const reply = await engine.chat.completions.create({ messages: messages as any });
-      const aiText = reply.choices[0].message.content || "にゃ？";
-      addChatMessage("nijinai", aiText, "#ff4d97");
-      connections.forEach(c => c.send({ type: 'chat', name: "nijinai", content: aiText }));
-      // 自動リアクション
-      reactions.push({ emoji: '❤️', time: Date.now() });
-      connections.forEach(c => c.send({ type: 'reaction', content: '❤️' }));
-    } catch (e) { addChatMessage("nijinai", "にゃあ、エラーだにゃ...", "#ff4d97"); }
+// カメラボタン（名前表示連動）
+document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
+  const track = localStream.getVideoTracks()[0];
+  track.enabled = !track.enabled;
+  
+  const container = document.querySelector('#local-container')!;
+  const label = document.querySelector('#local-name-label')!;
+  
+  if (!track.enabled) {
+    container.classList.add('camera-off');
+    label.textContent = myName;
+  } else {
+    container.classList.remove('camera-off');
   }
+  (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
+});
+
+// アバターボタン（全体ガード連動）
+document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
+  const isOff = needleFrame.style.display === 'none' || needleFrame.style.display === '';
+  
+  needleFrame.style.display = isOff ? 'block' : 'none';
+  needleGuard.style.display = isOff ? 'block' : 'none'; // ガードパネルを出す
+  
+  bigVideo.style.opacity = isOff ? '0' : '1';
+  (e.currentTarget as HTMLElement).classList.toggle('active', isOff);
+});
+
+// チャット送信
+document.querySelector('#chat-send-btn')?.addEventListener('click', () => {
+  const input = document.querySelector<HTMLInputElement>('#chat-input')!;
+  if (!input.value.trim()) return;
+  dataConnections.forEach(conn => conn.send({ name: myName, message: input.value }));
+  appendMessage("自分", input.value, true);
   input.value = "";
 });
 
-// --- その他イベント (以前の機能をすべて復元) ---
-navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
-  processedStream = canvas.captureStream(30);
-  stream.getAudioTracks().forEach(t => processedStream.addTrack(t));
-  video.srcObject = stream;
-  video.play();
-  const loop = async () => { await selfie.send({ image: video }); await faceMesh.send({ image: video }); requestAnimationFrame(loop); };
-  loop();
+function appendMessage(sender: string, text: string, isMe = false) {
+  const div = document.createElement('div');
+  div.className = `chat-msg ${isMe ? 'me' : ''}`;
+  div.innerText = `${sender}: ${text}`;
+  chatMessages.appendChild(div);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+document.querySelector('#chat-toggle-btn')?.addEventListener('click', () => {
+  chatBox.style.display = chatBox.style.display === 'none' ? 'flex' : 'none';
 });
 
-document.querySelectorAll('.react-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const emoji = (btn as HTMLElement).dataset.emoji!;
-    reactions.push({ emoji, time: Date.now() });
-    connections.forEach(c => c.send({ type: 'reaction', content: emoji }));
-  });
-});
-
-const setImg = (id: string, target: string) => {
-  document.querySelector<HTMLInputElement>(`#${id}`)?.addEventListener('change', (e: any) => {
-    const f = e.target.files[0]; if(!f) return;
-    const i = new Image(); i.onload = () => {
-      if(target==='close') imgClose=i; else if(target==='open') imgOpen=i;
-      else if(target==='blink') imgBlink=i; else backgroundImg=i;
-    };
-    i.src = URL.createObjectURL(f);
-  });
-};
-setImg('avatar-close', 'close'); setImg('avatar-open', 'open'); setImg('avatar-blink', 'blink'); setImg('bg-upload', 'bg');
-
-document.querySelector('#connect-btn')?.addEventListener('click', () => {
-  const id = (document.querySelector<HTMLInputElement>('#remote-id-input')!).value;
-  setupConn(peer.connect(id));
-  const call = peer.call(id, processedStream);
-  call.on('stream', (s) => {
-    const v = document.createElement('video'); v.style.width="280px"; v.srcObject=s; v.autoplay=true;
-    document.querySelector('#video-grid')?.appendChild(v);
-  });
-});
-
-document.querySelector('#camera-btn')?.addEventListener('click', () => {
-  const t = (video.srcObject as MediaStream).getVideoTracks()[0]; t.enabled = !t.enabled;
-  document.querySelector<HTMLButtonElement>('#camera-btn')!.innerText = t.enabled ? "📹 カメラ: ON" : "📹 カメラ: OFF";
-});
-document.querySelector('#mic-btn')?.addEventListener('click', () => {
-  isMicOn = !isMicOn; (video.srcObject as MediaStream).getAudioTracks()[0].enabled = isMicOn;
-  document.querySelector<HTMLButtonElement>('#mic-btn')!.innerText = isMicOn ? "🎤 マイク: ON" : "🎤 マイク: OFF";
-});
-document.querySelector('#avatar-mode-btn')?.addEventListener('click', () => {
-  isAvatarMode = !isAvatarMode;
-  document.querySelector<HTMLButtonElement>('#avatar-mode-btn')!.innerText = isAvatarMode ? "👤 アバター: ON" : "👤 アバター: OFF";
-});
-document.querySelector('#hangup-btn')?.addEventListener('click', () => location.reload());
+init();
