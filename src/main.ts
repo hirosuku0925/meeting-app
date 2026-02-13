@@ -29,17 +29,26 @@ globalStyle.textContent = `
   .chat-msg.me { color: #4facfe; background: rgba(79, 172, 254, 0.1); }
   
   .name-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 18px; font-weight: bold; color: white; display: none; z-index: 2; text-shadow: 0 0 8px rgba(0,0,0,0.9); pointer-events: none; }
-  /* カメラOFFまたはアバターOFF時に名前を出す */
   .camera-off .name-label { display: block; }
   .camera-off video { opacity: 0; }
   
   /* アバター表示用のクラス設定 */
   .avatar-active video { opacity: 0; }
   .remote-avatar-small { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 3; pointer-events: none; }
-  /* アバターとカメラが両方ONのときだけ表示 */
   .avatar-active.camera-on .remote-avatar-small { display: block; }
 
   #needle-frame, #main-remote-avatar { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; background: #1a1a1a; }
+  
+  /* 【重要】相手がボタンを触れないようにするシールド */
+  .avatar-shield {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    z-index: 10; /* アバターより手前に配置 */
+    background: transparent;
+    pointer-events: all; /* すべてのクリックをここで止める */
+    display: none;
+  }
+
   .video-container { position: relative; height: 120px; min-width: 160px; background: #222; border-radius: 8px; overflow: hidden; cursor: pointer; border: 2px solid #333; flex-shrink: 0; }
   .video-container.active-border { border-color: #4facfe; }
 `;
@@ -52,9 +61,13 @@ app.innerHTML = `
     <div id="main-display" style="flex: 1; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
       <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain;"></video>
       <iframe id="needle-frame" src="about:blank" allow="camera; microphone;"></iframe>
-      <iframe id="main-remote-avatar" src="about:blank" allow="camera; microphone;"></iframe>
       
-      <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 10;">準備中...</div>
+      <div id="remote-avatar-wrapper" style="position:absolute; top:0; left:0; width:100%; height:100%; display:none;">
+        <iframe id="main-remote-avatar" src="about:blank" allow="camera; microphone;" style="width:100%; height:100%; border:none;"></iframe>
+        <div id="avatar-shield" class="avatar-shield"></div>
+      </div>
+      
+      <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 20;">準備中...</div>
       <div id="chat-box" style="display:none; position: absolute; right: 10px; top: 10px; bottom: 10px; width: 250px; background: rgba(20,20,20,0.95); border-radius: 8px; flex-direction: column; border: 1px solid #444; z-index: 100;">
         <div style="padding: 10px; border-bottom: 1px solid #444; font-size: 13px; font-weight: bold;">チャット</div>
         <div id="chat-messages" style="flex: 1; overflow-y: auto; padding: 10px; font-size: 12px;"></div>
@@ -90,6 +103,8 @@ const chatBox = document.querySelector<HTMLDivElement>('#chat-box')!;
 const chatMessages = document.querySelector<HTMLDivElement>('#chat-messages')!;
 const needleFrame = document.querySelector<HTMLIFrameElement>('#needle-frame')!;
 const mainRemoteAvatar = document.querySelector<HTMLIFrameElement>('#main-remote-avatar')!;
+const remoteAvatarWrapper = document.querySelector<HTMLDivElement>('#remote-avatar-wrapper')!;
+const avatarShield = document.querySelector<HTMLDivElement>('#avatar-shield')!;
 
 let localStream: MediaStream;
 let peer: Peer | null = null;
@@ -128,23 +143,25 @@ function updateMainDisplay(stream: MediaStream, avatarState: boolean, camState: 
     bigVideo.srcObject = stream;
     bigVideo.muted = isMuted;
 
-    // アバターON かつ カメラがONの時だけ表示
     if (avatarState && camState) {
         bigVideo.style.opacity = '0';
         if (currentFocusedPeerId === 'local') {
+            // 自分のアバター（操作可能）
             if (needleFrame.src !== AVATAR_URL) needleFrame.src = AVATAR_URL;
             needleFrame.style.display = 'block';
-            mainRemoteAvatar.style.display = 'none';
+            remoteAvatarWrapper.style.display = 'none';
         } else {
+            // 相手のアバター（シールドで操作禁止）
             if (mainRemoteAvatar.src !== AVATAR_URL) mainRemoteAvatar.src = AVATAR_URL;
-            mainRemoteAvatar.style.display = 'block';
+            remoteAvatarWrapper.style.display = 'block';
+            avatarShield.style.display = 'block'; // シールドを表示
             needleFrame.style.display = 'none';
         }
     } else {
-        // カメラOFFまたはアバターOFF
         bigVideo.style.opacity = camState ? '1' : '0';
         needleFrame.style.display = 'none';
-        mainRemoteAvatar.style.display = 'none';
+        remoteAvatarWrapper.style.display = 'none';
+        avatarShield.style.display = 'none';
     }
 }
 
@@ -197,7 +214,6 @@ function setupDataEvents(conn: DataConnection) {
         const label = container.querySelector('.name-label');
         if (label) label.textContent = data.name;
 
-        // 【重要】相手がアバターONかつカメラONならURLを読み込む
         const smallIframe = container.querySelector<HTMLIFrameElement>('.remote-avatar-small')!;
         if (remote.avatar && remote.cam) {
             if (smallIframe.src !== AVATAR_URL) smallIframe.src = AVATAR_URL;
@@ -275,7 +291,6 @@ document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
   document.querySelector('#local-name-label')!.textContent = myName;
   (e.currentTarget as HTMLElement).classList.toggle('off', !isCameraOn);
 
-  // カメラをオフにした時、メイン表示からもアバターを消す
   if (currentFocusedPeerId === 'local') {
       updateMainDisplay(localStream, isAvatarOn, isCameraOn, true);
   }
