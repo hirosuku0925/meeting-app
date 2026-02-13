@@ -32,7 +32,7 @@ const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <div style="display: flex; height: 100vh; width: 100%; flex-direction: column;">
     <div id="main-display" style="flex: 1; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
-      <video id="big-video" autoplay playsinline style="width: 100%; height: 100%; object-fit: contain;"></video>
+      <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain;"></video>
       <iframe id="needle-frame" src="https://engine.needle.tools/samples-uploads/facefilter/?" allow="camera; microphone; fullscreen"></iframe>
       <div id="needle-guard"></div> 
       <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 10;">準備中...</div>
@@ -48,7 +48,7 @@ app.innerHTML = `
     </div>
 
     <div id="video-grid" style="height: 140px; background: #000; display: flex; gap: 10px; padding: 10px; overflow-x: auto; align-items: center; border-top: 1px solid #333;">
-      <div id="local-container" class="video-container">
+      <div id="local-container" class="video-container active-border">
         <video id="local-video" autoplay playsinline muted style="height: 100%; width: 100%; object-fit: cover;"></video>
         <div id="local-name-label" class="name-label"></div>
       </div>
@@ -89,36 +89,43 @@ const connections = new Map<string, { call?: MediaConnection, data?: DataConnect
 async function init() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    
+    // 【重要】自分自身のビデオは絶対にミュート
     localVideo.srcObject = localStream;
+    localVideo.muted = true; 
+    
     bigVideo.srcObject = localStream;
-    statusBadge.innerText = "オフライン (準備完了)";
+    bigVideo.muted = true; // メイン画面に自分が映る時もミュート
 
     (document.querySelector('#name-input') as HTMLInputElement).value = SettingsManager.getUserName() || "";
     (document.querySelector('#room-input') as HTMLInputElement).value = SettingsManager.getLastRoomName() || "";
 
     setupFaceAvatarButtonHandler('avatar-btn');
     setupVoiceChangerButtonHandler();
+
+    // 自分のクリックイベント
+    document.querySelector('#local-container')!.addEventListener('click', () => {
+        bigVideo.srcObject = localStream;
+        bigVideo.muted = true; // 自分はミュート
+        document.querySelectorAll('.video-container').forEach(c => c.classList.remove('active-border'));
+        document.querySelector('#local-container')!.classList.add('active-border');
+    });
+
   } catch (e) {
     statusBadge.innerText = "エラー: カメラ/マイクを許可してください";
-    console.error(e);
   }
 }
 
-// --- 5. 接続ロジック（フルメッシュ） ---
+// --- 5. 接続ロジック ---
 function joinRoom(roomKey: string, seat: number) {
   if (peer) peer.destroy();
-  
   const myPeerId = `${roomKey}-${seat}`;
   peer = new Peer(myPeerId);
 
-  peer.on('open', (id) => {
+  peer.on('open', () => {
     statusBadge.innerText = `オンライン: 席 ${seat}`;
-    statusBadge.style.borderColor = "#2ecc71";
-    
-    // 1番から自分の前の番号までの全員に自分から接続を仕掛ける
     for (let i = 1; i < seat; i++) {
-      const targetId = `${roomKey}-${i}`;
-      connectToTarget(targetId);
+      connectToTarget(`${roomKey}-${i}`);
     }
   });
 
@@ -127,26 +134,17 @@ function joinRoom(roomKey: string, seat: number) {
     setupCallEvents(call);
   });
 
-  peer.on('connection', (conn) => {
-    setupDataEvents(conn);
-  });
+  peer.on('connection', (conn) => setupDataEvents(conn));
 
   peer.on('error', (err) => {
-    if (err.type === 'unavailable-id') {
-      // 席が埋まっていたら次の席を試す
-      joinRoom(roomKey, seat + 1);
-    } else {
-      console.error('PeerJS Error:', err);
-    }
+    if (err.type === 'unavailable-id') joinRoom(roomKey, seat + 1);
   });
 }
 
 function connectToTarget(targetId: string) {
   if (!peer) return;
-  // メディア接続
   const call = peer.call(targetId, localStream);
   if (call) setupCallEvents(call);
-  // データ接続
   const conn = peer.connect(targetId);
   if (conn) setupDataEvents(conn);
 }
@@ -156,19 +154,14 @@ function setupCallEvents(call: MediaConnection) {
     addRemoteVideo(call.peer, remoteStream);
   });
   call.on('close', () => removeRemoteVideo(call.peer));
-  call.on('error', () => removeRemoteVideo(call.peer));
 }
 
 function setupDataEvents(conn: DataConnection) {
   const current = connections.get(conn.peer) || {};
   connections.set(conn.peer, { ...current, data: conn });
-
   conn.on('data', (data: any) => {
-    if (data && data.type === 'chat') {
-      appendMessage(data.name, data.message);
-    }
+    if (data && data.type === 'chat') appendMessage(data.name, data.message);
   });
-  conn.on('close', () => connections.delete(conn.peer));
 }
 
 function addRemoteVideo(peerId: string, stream: MediaStream) {
@@ -187,20 +180,20 @@ function addRemoteVideo(peerId: string, stream: MediaStream) {
   container.appendChild(v);
   videoGrid.appendChild(container);
 
+  // 【重要】他人のビデオをクリックした時だけ音を出す
   container.onclick = () => {
     bigVideo.srcObject = stream;
-    // 他のコンテナの枠線を消して、クリックしたものを強調
+    bigVideo.muted = false; // 他人はミュート解除
     document.querySelectorAll('.video-container').forEach(c => c.classList.remove('active-border'));
     container.classList.add('active-border');
   };
 }
 
 function removeRemoteVideo(peerId: string) {
-  const el = document.getElementById(`container-${peerId}`);
-  if (el) el.remove();
+  document.getElementById(`container-${peerId}`)?.remove();
   if (bigVideo.srcObject instanceof MediaStream && connections.get(peerId)) {
-     // メイン画面が消えた人のものだったら自分に戻す
      bigVideo.srcObject = localStream;
+     bigVideo.muted = true; // 自分に戻ったらミュート
   }
   connections.delete(peerId);
 }
@@ -210,31 +203,23 @@ function removeRemoteVideo(peerId: string) {
 document.querySelector('#join-btn')?.addEventListener('click', () => {
   const room = (document.querySelector('#room-input') as HTMLInputElement).value.trim();
   myName = (document.querySelector('#name-input') as HTMLInputElement).value.trim() || "名無し";
-  
   if (!room) return alert("部屋名を入力してください");
   
   SettingsManager.setUserName(myName);
   SettingsManager.setLastRoomName(room);
-  
-  // 初期化（既存接続クリア）
   videoGrid.querySelectorAll('.video-container:not(#local-container)').forEach(v => v.remove());
   connections.clear();
-  
   joinRoom(`vFINAL-${room}`, 1);
 });
 
-document.querySelector('#exit-btn')?.addEventListener('click', () => {
-  if (confirm("終了しますか？")) location.reload();
-});
+document.querySelector('#exit-btn')?.addEventListener('click', () => { if (confirm("終了しますか？")) location.reload(); });
 
 document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
   const track = localStream.getVideoTracks()[0];
   if (!track) return;
   track.enabled = !track.enabled;
-  
   const container = document.querySelector('#local-container')!;
   const label = document.querySelector('#local-name-label')!;
-  
   if (!track.enabled) {
     container.classList.add('camera-off');
     label.textContent = myName;
@@ -246,9 +231,8 @@ document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
 
 document.querySelector('#mic-btn')?.addEventListener('click', (e) => {
     const track = localStream.getAudioTracks()[0];
-    if (!track) return;
-    track.enabled = !track.enabled;
-    (e.currentTarget as HTMLElement).classList.toggle('off', !track.enabled);
+    if (track) track.enabled = !track.enabled;
+    (e.currentTarget as HTMLElement).classList.toggle('off', !track?.enabled);
 });
 
 document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
@@ -260,21 +244,11 @@ document.querySelector('#avatar-btn')?.addEventListener('click', (e) => {
 });
 
 document.querySelector('#chat-send-btn')?.addEventListener('click', sendChatMessage);
-document.querySelector('#chat-input')?.addEventListener('keypress', (e) => {
-    if ((e as KeyboardEvent).key === 'Enter') sendChatMessage();
-});
-
 function sendChatMessage() {
   const input = document.querySelector<HTMLInputElement>('#chat-input')!;
   const msg = input.value.trim();
   if (!msg) return;
-
-  connections.forEach(conn => {
-    if (conn.data && conn.data.open) {
-      conn.data.send({ type: 'chat', name: myName, message: msg });
-    }
-  });
-
+  connections.forEach(conn => conn.data?.open && conn.data.send({ type: 'chat', name: myName, message: msg }));
   appendMessage("自分", msg, true);
   input.value = "";
 }
@@ -293,5 +267,4 @@ document.querySelector('#chat-toggle-btn')?.addEventListener('click', (e) => {
   (e.currentTarget as HTMLElement).classList.toggle('active', isHidden);
 });
 
-// 起動
 init();
