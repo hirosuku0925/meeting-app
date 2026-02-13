@@ -28,12 +28,14 @@ globalStyle.textContent = `
   .chat-msg { margin-bottom: 5px; word-break: break-all; padding: 4px; border-radius: 4px; background: rgba(255,255,255,0.05); }
   .chat-msg.me { color: #4facfe; background: rgba(79, 172, 254, 0.1); }
   
-  /* 名前ラベルの修正：カメラオフの時だけ中央に表示 */
   .name-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 18px; font-weight: bold; color: white; display: none; z-index: 2; text-shadow: 0 0 8px rgba(0,0,0,0.9); pointer-events: none; }
   .camera-off .name-label { display: block; }
   .camera-off video { opacity: 0; }
-  /* アバター中はビデオを隠す */
+  
+  /* アバター表示用のクラス設定 */
   .avatar-active video { opacity: 0; }
+  .remote-avatar-small { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 3; pointer-events: none; }
+  .avatar-active .remote-avatar-small { display: block; }
 
   #needle-frame, #main-remote-avatar { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; background: #1a1a1a; }
   .video-container { position: relative; height: 120px; min-width: 160px; background: #222; border-radius: 8px; overflow: hidden; cursor: pointer; border: 2px solid #333; flex-shrink: 0; }
@@ -120,7 +122,6 @@ async function init() {
   } catch (e) { statusBadge.innerText = "カメラを許可してください"; }
 }
 
-// メイン画面の表示更新（WebGLの解放処理を含む）
 function updateMainDisplay(stream: MediaStream, avatarState: boolean, isMuted: boolean) {
     bigVideo.srcObject = stream;
     bigVideo.muted = isMuted;
@@ -128,25 +129,18 @@ function updateMainDisplay(stream: MediaStream, avatarState: boolean, isMuted: b
     if (avatarState) {
         bigVideo.style.opacity = '0';
         if (currentFocusedPeerId === 'local') {
-            // 自分：needleFrameを使用、他方は解放
             if (needleFrame.src !== AVATAR_URL) needleFrame.src = AVATAR_URL;
             needleFrame.style.display = 'block';
             mainRemoteAvatar.style.display = 'none';
-            mainRemoteAvatar.src = "about:blank";
         } else {
-            // 相手：mainRemoteAvatarを使用、自分用は解放
             if (mainRemoteAvatar.src !== AVATAR_URL) mainRemoteAvatar.src = AVATAR_URL;
             mainRemoteAvatar.style.display = 'block';
             needleFrame.style.display = 'none';
-            needleFrame.src = "about:blank";
         }
     } else {
-        // アバターOFF：すべて解放してビデオを表示
         bigVideo.style.opacity = '1';
         needleFrame.style.display = 'none';
         mainRemoteAvatar.style.display = 'none';
-        needleFrame.src = "about:blank";
-        mainRemoteAvatar.src = "about:blank";
     }
 }
 
@@ -193,14 +187,20 @@ function setupDataEvents(conn: DataConnection) {
 
       const container = document.getElementById(`container-${conn.peer}`);
       if (container) {
-        // カメラオフまたはアバター中の時にビデオを隠す
         container.classList.toggle('camera-off', !data.cam);
         container.classList.toggle('avatar-active', remote.avatar);
         const label = container.querySelector('.name-label');
         if (label) label.textContent = data.name;
+
+        // 【重要】相手がアバターONならURLを読み込む
+        const smallIframe = container.querySelector<HTMLIFrameElement>('.remote-avatar-small')!;
+        if (remote.avatar) {
+            if (smallIframe.src !== AVATAR_URL) smallIframe.src = AVATAR_URL;
+        } else {
+            smallIframe.src = "about:blank";
+        }
       }
 
-      // 現在大きく映っている相手の状態が変わったらメイン画面も更新
       if (currentFocusedPeerId === conn.peer && container) {
           const videoEl = container.querySelector('video')!;
           updateMainDisplay(videoEl.srcObject as MediaStream, remote.avatar, false);
@@ -217,6 +217,7 @@ function addRemoteVideo(peerId: string, stream: MediaStream) {
   container.className = "video-container";
   container.innerHTML = `
     <video autoplay playsinline style="height:100%;width:100%;object-fit:cover;"></video>
+    <iframe class="remote-avatar-small" src="about:blank" allow="camera; microphone;"></iframe>
     <div class="name-label"></div>
   `;
   const v = container.querySelector('video')!;
