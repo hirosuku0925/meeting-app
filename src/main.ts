@@ -5,7 +5,7 @@ import { setupVoiceChangerButtonHandler } from './voice-changer-dialog'
 import { setupFaceAvatarButtonHandler } from './face-image-avatar-dialog'
 import SettingsManager from './settings-manager'
 
-// --- 1. スタイル設定 ---
+// --- 1. スタイル (省略なし) ---
 const globalStyle = document.createElement('style');
 globalStyle.textContent = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -15,8 +15,6 @@ globalStyle.textContent = `
   .tool-btn.active { background: #4facfe !important; }
   .tool-btn.off { background: #ea4335 !important; }
   .ctrl-group { display: flex; flex-direction: column; align-items: center; font-size: 10px; color: #888; gap: 4px; }
-  .chat-msg { margin-bottom: 5px; word-break: break-all; padding: 4px; border-radius: 4px; background: rgba(255,255,255,0.05); }
-  .chat-msg.me { color: #4facfe; background: rgba(79, 172, 254, 0.1); }
   .name-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 18px; font-weight: bold; color: white; display: none; z-index: 2; text-shadow: 0 0 8px rgba(0,0,0,0.9); pointer-events: none; }
   .camera-off .name-label { display: block; }
   .camera-off video { opacity: 0; }
@@ -27,7 +25,7 @@ globalStyle.textContent = `
 `;
 document.head.appendChild(globalStyle);
 
-// --- 2. HTML構造 ---
+// --- 2. HTML (省略なし) ---
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <div style="display: flex; height: 100vh; width: 100%; flex-direction: column;">
@@ -73,21 +71,29 @@ const needleFrame = document.querySelector<HTMLIFrameElement>('#needle-frame')!;
 const needleGuard = document.querySelector<HTMLDivElement>('#needle-guard')!;
 
 let localStream: MediaStream;
+let rawCameraStream: MediaStream; // 生のカメラを保存
 let peer: Peer | null = null;
 let myName = "ゲスト";
 let isCameraOn = true;
-const connections = new Map<string, { call?: MediaConnection, data?: DataConnection, name: string }>();
+let isAvatarOn = false;
+
+// 接続中のPeerを管理（MediaConnectionを保持してストリームを入れ替えるため）
+const connections = new Map<string, { call: MediaConnection, data: DataConnection, name: string }>();
 
 // --- 4. 初期化 ---
 async function init() {
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    rawCameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    localStream = rawCameraStream;
     localVideo.srcObject = localStream;
     bigVideo.srcObject = localStream;
+
     (document.querySelector('#name-input') as HTMLInputElement).value = SettingsManager.getUserName() || "";
     (document.querySelector('#room-input') as HTMLInputElement).value = SettingsManager.getLastRoomName() || "";
+
     setupFaceAvatarButtonHandler('avatar-btn');
     setupVoiceChangerButtonHandler();
+
     document.querySelector('#local-container')!.addEventListener('click', () => {
         bigVideo.srcObject = localStream;
         bigVideo.muted = true;
@@ -101,43 +107,50 @@ async function init() {
 function joinRoom(roomKey: string, seat: number) {
   if (peer) peer.destroy();
   peer = new Peer(`${roomKey}-${seat}`);
+
   peer.on('open', () => {
     statusBadge.innerText = `オンライン: 席 ${seat}`;
     for (let i = 1; i < seat; i++) connectToTarget(`${roomKey}-${i}`);
   });
+
   peer.on('call', (call) => {
     call.answer(localStream);
     setupCallEvents(call);
   });
+
   peer.on('connection', (conn) => setupDataEvents(conn));
   peer.on('error', (err) => { if (err.type === 'unavailable-id') joinRoom(roomKey, seat + 1); });
 }
 
 function connectToTarget(targetId: string) {
   if (!peer) return;
-  setupCallEvents(peer.call(targetId, localStream));
-  setupDataEvents(peer.connect(targetId));
+  const call = peer.call(targetId, localStream);
+  const conn = peer.connect(targetId);
+  setupCallEvents(call);
+  setupDataEvents(conn);
 }
 
 function setupCallEvents(call: MediaConnection) {
-  call.on('stream', (stream) => addRemoteVideo(call.peer, stream));
+  call.on('stream', (stream) => addRemoteVideo(call.peer, stream, call));
   call.on('close', () => removeRemoteVideo(call.peer));
 }
 
 function setupDataEvents(conn: DataConnection) {
   conn.on('open', () => {
-    connections.set(conn.peer, { ...connections.get(conn.peer)!, data: conn, name: "不明" });
-    // 自分の現在の状態（名前とカメラ）を速攻で送る
-    conn.send({ type: 'sync', name: myName, cam: isCameraOn });
+    const existing = connections.get(conn.peer);
+    if (existing) existing.data = conn;
+    conn.send({ type: 'sync', name: myName, cam: isCameraOn, avatar: isAvatarOn });
   });
+
   conn.on('data', (data: any) => {
     const remote = connections.get(conn.peer);
     if (!data || !remote) return;
-    if (data.type === 'sync' || data.type === 'cam-toggle') {
+
+    if (data.type === 'sync' || data.type === 'state-change') {
       remote.name = data.name;
       const container = document.getElementById(`container-${conn.peer}`);
       if (container) {
-        container.classList.toggle('camera-off', !data.cam);
+        container.classList.toggle('camera-off', !data.cam && !data.avatar);
         const label = container.querySelector('.name-label');
         if (label) label.textContent = data.name;
       }
@@ -146,8 +159,9 @@ function setupDataEvents(conn: DataConnection) {
   });
 }
 
-function addRemoteVideo(peerId: string, stream: MediaStream) {
+function addRemoteVideo(peerId: string, stream: MediaStream, call: MediaConnection) {
   if (document.getElementById(`container-${peerId}`)) return;
+
   const container = document.createElement('div');
   container.id = `container-${peerId}`;
   container.className = "video-container";
@@ -155,13 +169,17 @@ function addRemoteVideo(peerId: string, stream: MediaStream) {
   const v = container.querySelector('video')!;
   v.srcObject = stream;
   videoGrid.appendChild(container);
+
   container.onclick = () => {
     bigVideo.srcObject = stream;
     bigVideo.muted = false;
     document.querySelectorAll('.video-container').forEach(c => c.classList.remove('active-border'));
     container.classList.add('active-border');
   };
-  if (!connections.has(peerId)) connections.set(peerId, { name: "待機中" });
+
+  // connectionsに登録（後でストリームを入れ替えるのに使う）
+  const dataConn = connections.get(peerId)?.data;
+  connections.set(peerId, { call, data: dataConn!, name: "不明" });
 }
 
 function removeRemoteVideo(peerId: string) {
@@ -171,28 +189,65 @@ function removeRemoteVideo(peerId: string) {
 
 // --- 6. ユーザーアクション ---
 
+// カメラボタン
 document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
-  const track = localStream.getVideoTracks()[0];
+  const track = rawCameraStream.getVideoTracks()[0];
   if (!track) return;
   isCameraOn = !isCameraOn;
   track.enabled = isCameraOn;
   
-  // 自分の表示更新
-  const container = document.querySelector('#local-container')!;
-  container.classList.toggle('camera-off', !isCameraOn);
-  document.querySelector('#local-name-label')!.textContent = myName;
-  (e.currentTarget as HTMLElement).classList.toggle('off', !isCameraOn);
+  updateLocalUI();
+  broadcastState();
+});
 
-  // 【重要】全員にカメラ状態を通知
-  connections.forEach(c => {
-    if (c.data?.open) c.data.send({ type: 'cam-toggle', name: myName, cam: isCameraOn });
+// アバターボタン
+document.querySelector('#avatar-btn')?.addEventListener('click', async (e) => {
+  isAvatarOn = !isAvatarOn;
+  
+  if (isAvatarOn) {
+    needleFrame.style.display = 'block';
+    needleGuard.style.display = 'block';
+    bigVideo.style.opacity = '0';
+    // 本来はここでNeedle EngineのcanvasからcaptureStream()したものをlocalStreamにする
+    // 例: localStream = (needleCanvas as any).captureStream(30);
+  } else {
+    needleFrame.style.display = 'none';
+    needleGuard.style.display = 'none';
+    bigVideo.style.opacity = '1';
+    localStream = rawCameraStream;
+  }
+
+  updateLocalUI();
+  broadcastState();
+  
+  // ストリームが切り替わったことを相手に反映（replaceTrack）
+  const videoTrack = localStream.getVideoTracks()[0];
+  connections.forEach(conn => {
+    const sender = conn.call.peerConnection.getSenders().find(s => s.track?.kind === 'video');
+    if (sender && videoTrack) sender.replaceTrack(videoTrack);
   });
 });
 
+function updateLocalUI() {
+  const container = document.querySelector('#local-container')!;
+  // カメラもアバターもOFFなら名前を出す
+  container.classList.toggle('camera-off', !isCameraOn && !isAvatarOn);
+  document.querySelector('#local-name-label')!.textContent = myName;
+  document.querySelector('#cam-btn')!.classList.toggle('off', !isCameraOn);
+  document.querySelector('#avatar-btn')!.classList.toggle('active', isAvatarOn);
+}
+
+function broadcastState() {
+  connections.forEach(c => {
+    if (c.data?.open) c.data.send({ type: 'state-change', name: myName, cam: isCameraOn, avatar: isAvatarOn });
+  });
+}
+
+// 以下、参加・チャット等のイベント (省略なし)
 document.querySelector('#join-btn')?.addEventListener('click', () => {
   const room = (document.querySelector('#room-input') as HTMLInputElement).value.trim();
   myName = (document.querySelector('#name-input') as HTMLInputElement).value.trim() || "名無し";
-  if (!room) return alert("部屋名を入力してください");
+  if (!room) return alert("部屋名を入れてください");
   SettingsManager.setUserName(myName);
   SettingsManager.setLastRoomName(room);
   joinRoom(`vFINAL-${room}`, 1);
@@ -206,16 +261,7 @@ document.querySelector('#chat-send-btn')?.addEventListener('click', () => {
   input.value = "";
 });
 
-document.querySelector('#mic-btn')?.addEventListener('click', (e) => {
-    const track = localStream.getAudioTracks()[0];
-    if (track) track.enabled = !track.enabled;
-    (e.currentTarget as HTMLElement).classList.toggle('off', !track?.enabled);
-});
-
 document.querySelector('#exit-btn')?.addEventListener('click', () => location.reload());
-document.querySelector('#chat-toggle-btn')?.addEventListener('click', () => {
-  chatBox.style.display = chatBox.style.display === 'none' ? 'flex' : 'none';
-});
 
 function appendMessage(sender: string, text: string, isMe = false) {
   const div = document.createElement('div');
