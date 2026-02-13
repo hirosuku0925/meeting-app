@@ -1,6 +1,6 @@
 import './style.css'
 import { Peer, MediaConnection, DataConnection } from 'peerjs'
-import voiceChangerManager from './voice-changer-manager' // 使用していない場合は削除可
+import voiceChangerManager from './voice-changer-manager' 
 import { setupVoiceChangerButtonHandler } from './voice-changer-dialog'
 import { setupFaceAvatarButtonHandler } from './face-image-avatar-dialog'
 import SettingsManager from './settings-manager'
@@ -12,6 +12,8 @@ interface RemoteUser {
     avatar: boolean;
     cam: boolean;
 }
+
+const AVATAR_URL = "https://engine.needle.tools/samples-uploads/facefilter/?";
 
 // --- 1. スタイル設定 ---
 const globalStyle = document.createElement('style');
@@ -25,14 +27,15 @@ globalStyle.textContent = `
   .ctrl-group { display: flex; flex-direction: column; align-items: center; font-size: 10px; color: #888; gap: 4px; }
   .chat-msg { margin-bottom: 5px; word-break: break-all; padding: 4px; border-radius: 4px; background: rgba(255,255,255,0.05); }
   .chat-msg.me { color: #4facfe; background: rgba(79, 172, 254, 0.1); }
-  .name-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 18px; font-weight: bold; color: white; display: none; z-index: 2; text-shadow: 0 0 8px rgba(0,0,0,0.9); pointer-events: none; }
   
-  .remote-avatar-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; z-index: 4; border: none; pointer-events: none; }
-  .avatar-active .remote-avatar-overlay { display: block; }
+  /* 名前ラベルの修正：カメラオフの時だけ中央に表示 */
+  .name-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 18px; font-weight: bold; color: white; display: none; z-index: 2; text-shadow: 0 0 8px rgba(0,0,0,0.9); pointer-events: none; }
   .camera-off .name-label { display: block; }
   .camera-off video { opacity: 0; }
+  /* アバター中はビデオを隠す */
+  .avatar-active video { opacity: 0; }
 
-  #needle-frame, #main-remote-avatar { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; }
+  #needle-frame, #main-remote-avatar { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; background: #1a1a1a; }
   .video-container { position: relative; height: 120px; min-width: 160px; background: #222; border-radius: 8px; overflow: hidden; cursor: pointer; border: 2px solid #333; flex-shrink: 0; }
   .video-container.active-border { border-color: #4facfe; }
 `;
@@ -44,8 +47,9 @@ app.innerHTML = `
   <div style="display: flex; height: 100vh; width: 100%; flex-direction: column;">
     <div id="main-display" style="flex: 1; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
       <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain;"></video>
-      <iframe id="needle-frame" src="https://engine.needle.tools/samples-uploads/facefilter/?" allow="camera; microphone;"></iframe>
-      <iframe id="main-remote-avatar" src="https://engine.needle.tools/samples-uploads/facefilter/?" allow="camera; microphone;"></iframe>
+      <iframe id="needle-frame" src="about:blank" allow="camera; microphone;"></iframe>
+      <iframe id="main-remote-avatar" src="about:blank" allow="camera; microphone;"></iframe>
+      
       <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 10;">準備中...</div>
       <div id="chat-box" style="display:none; position: absolute; right: 10px; top: 10px; bottom: 10px; width: 250px; background: rgba(20,20,20,0.95); border-radius: 8px; flex-direction: column; border: 1px solid #444; z-index: 100;">
         <div style="padding: 10px; border-bottom: 1px solid #444; font-size: 13px; font-weight: bold;">チャット</div>
@@ -73,7 +77,7 @@ app.innerHTML = `
   </div>
 `;
 
-// --- 3. 変数管理と型キャスト ---
+// --- 3. 変数管理 ---
 const bigVideo = document.querySelector<HTMLVideoElement>('#big-video')!;
 const localVideo = document.querySelector<HTMLVideoElement>('#local-video')!;
 const videoGrid = document.querySelector<HTMLDivElement>('#video-grid')!;
@@ -113,25 +117,36 @@ async function init() {
         document.querySelectorAll('.video-container').forEach(c => c.classList.remove('active-border'));
         document.querySelector('#local-container')!.classList.add('active-border');
     });
-    console.log(voiceChangerManager); // 警告回避のため
   } catch (e) { statusBadge.innerText = "カメラを許可してください"; }
 }
 
+// メイン画面の表示更新（WebGLの解放処理を含む）
 function updateMainDisplay(stream: MediaStream, avatarState: boolean, isMuted: boolean) {
     bigVideo.srcObject = stream;
     bigVideo.muted = isMuted;
-    
-    needleFrame.style.display = 'none';
-    mainRemoteAvatar.style.display = 'none';
-    bigVideo.style.opacity = '1';
 
     if (avatarState) {
         bigVideo.style.opacity = '0';
         if (currentFocusedPeerId === 'local') {
+            // 自分：needleFrameを使用、他方は解放
+            if (needleFrame.src !== AVATAR_URL) needleFrame.src = AVATAR_URL;
             needleFrame.style.display = 'block';
+            mainRemoteAvatar.style.display = 'none';
+            mainRemoteAvatar.src = "about:blank";
         } else {
+            // 相手：mainRemoteAvatarを使用、自分用は解放
+            if (mainRemoteAvatar.src !== AVATAR_URL) mainRemoteAvatar.src = AVATAR_URL;
             mainRemoteAvatar.style.display = 'block';
+            needleFrame.style.display = 'none';
+            needleFrame.src = "about:blank";
         }
+    } else {
+        // アバターOFF：すべて解放してビデオを表示
+        bigVideo.style.opacity = '1';
+        needleFrame.style.display = 'none';
+        mainRemoteAvatar.style.display = 'none';
+        needleFrame.src = "about:blank";
+        mainRemoteAvatar.src = "about:blank";
     }
 }
 
@@ -178,12 +193,14 @@ function setupDataEvents(conn: DataConnection) {
 
       const container = document.getElementById(`container-${conn.peer}`);
       if (container) {
-        container.classList.toggle('camera-off', !data.cam && !data.avatar);
-        container.classList.toggle('avatar-active', !!data.avatar);
+        // カメラオフまたはアバター中の時にビデオを隠す
+        container.classList.toggle('camera-off', !data.cam);
+        container.classList.toggle('avatar-active', remote.avatar);
         const label = container.querySelector('.name-label');
         if (label) label.textContent = data.name;
       }
 
+      // 現在大きく映っている相手の状態が変わったらメイン画面も更新
       if (currentFocusedPeerId === conn.peer && container) {
           const videoEl = container.querySelector('video')!;
           updateMainDisplay(videoEl.srcObject as MediaStream, remote.avatar, false);
@@ -200,7 +217,6 @@ function addRemoteVideo(peerId: string, stream: MediaStream) {
   container.className = "video-container";
   container.innerHTML = `
     <video autoplay playsinline style="height:100%;width:100%;object-fit:cover;"></video>
-    <iframe class="remote-avatar-overlay" src="https://engine.needle.tools/samples-uploads/facefilter/?" allow="camera; microphone;"></iframe>
     <div class="name-label"></div>
   `;
   const v = container.querySelector('video')!;
@@ -235,7 +251,7 @@ document.querySelector('#avatar-btn')?.addEventListener('click', () => {
       updateMainDisplay(localStream, isAvatarOn, true);
   }
   const container = document.querySelector('#local-container')!;
-  container.classList.toggle('camera-off', !isCameraOn && !isAvatarOn);
+  container.classList.toggle('avatar-active', isAvatarOn);
   document.querySelector('#avatar-btn')!.classList.toggle('active', isAvatarOn);
   broadcastState();
 });
@@ -246,7 +262,7 @@ document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
   isCameraOn = !isCameraOn;
   track.enabled = isCameraOn;
   const container = document.querySelector('#local-container')!;
-  container.classList.toggle('camera-off', !isCameraOn && !isAvatarOn);
+  container.classList.toggle('camera-off', !isCameraOn);
   document.querySelector('#local-name-label')!.textContent = myName;
   (e.currentTarget as HTMLElement).classList.toggle('off', !isCameraOn);
   broadcastState();
