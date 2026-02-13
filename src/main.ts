@@ -36,9 +36,13 @@ globalStyle.textContent = `
   .remote-avatar-small { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 3; pointer-events: none; }
   .avatar-active.camera-on .remote-avatar-small { display: block; }
 
-  #needle-frame, #main-remote-avatar { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; background: #1a1a1a; }
+  /* 自分のアバター用iframeを最前面(z-index: 15)にする */
+  #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 15; background: #1a1a1a; }
   
-  /* 透明なシールド: z-indexを高くしてクリックを遮断 */
+  /* 相手のアバター用iframe */
+  #main-remote-avatar { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; z-index: 5; }
+
+  /* 相手用シールド: 相手用アバター(5)より上で、自分用(15)より下にする */
   .avatar-shield {
     position: absolute;
     top: 0; left: 0; width: 100%; height: 100%;
@@ -58,17 +62,17 @@ const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <div style="display: flex; height: 100vh; width: 100%; flex-direction: column;">
     <div id="main-display" style="flex: 1; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
-      <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain;"></video>
+      <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain; z-index: 1;"></video>
       
       <iframe id="needle-frame" src="about:blank" allow="camera; microphone;"></iframe>
       
-      <div id="remote-avatar-wrapper" style="position:absolute; top:0; left:0; width:100%; height:100%; display:none;">
-        <iframe id="main-remote-avatar" src="about:blank" allow="camera; microphone;" style="width:100%; height:100%; border:none;"></iframe>
+      <div id="remote-avatar-wrapper" style="position:absolute; top:0; left:0; width:100%; height:100%; display:none; z-index: 5;">
+        <iframe id="main-remote-avatar" src="about:blank" allow="camera; microphone;"></iframe>
         <div id="avatar-shield" class="avatar-shield"></div>
       </div>
       
-      <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 20;">準備中...</div>
-      <div id="chat-box" style="display:none; position: absolute; right: 10px; top: 10px; bottom: 10px; width: 250px; background: rgba(20,20,20,0.95); border-radius: 8px; flex-direction: column; border: 1px solid #444; z-index: 100;">
+      <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 100;">準備中...</div>
+      <div id="chat-box" style="display:none; position: absolute; right: 10px; top: 10px; bottom: 10px; width: 250px; background: rgba(20,20,20,0.95); border-radius: 8px; flex-direction: column; border: 1px solid #444; z-index: 1000;">
         <div style="padding: 10px; border-bottom: 1px solid #444; font-size: 13px; font-weight: bold;">チャット</div>
         <div id="chat-messages" style="flex: 1; overflow-y: auto; padding: 10px; font-size: 12px;"></div>
         <div style="padding: 10px; display: flex; gap: 5px;"><input id="chat-input" type="text" style="flex: 1; background: #333; border: 1px solid #444; color: white; border-radius: 4px; padding: 6px;"><button id="chat-send-btn" style="background: #4facfe; border: none; color: white; padding: 0 10px; border-radius: 4px;">Go</button></div>
@@ -80,7 +84,7 @@ app.innerHTML = `
         <div id="local-name-label" class="name-label"></div>
       </div>
     </div>
-    <div id="toolbar" style="height: 80px; background: #111; display: flex; align-items: center; justify-content: center; gap: 15px; border-top: 1px solid #333; padding: 0 10px;">
+    <div id="toolbar" style="height: 80px; background: #111; display: flex; align-items: center; justify-content: center; gap: 15px; border-top: 1px solid #333; padding: 0 10px; z-index: 2000;">
       <div class="ctrl-group"><button id="mic-btn" class="tool-btn">🎤</button><span>マイク</span></div>
       <div class="ctrl-group"><button id="cam-btn" class="tool-btn">📹</button><span>カメラ</span></div>
       <div class="ctrl-group"><button id="chat-toggle-btn" class="tool-btn">💬</button><span>チャット</span></div>
@@ -146,19 +150,17 @@ function updateMainDisplay(stream: MediaStream, avatarState: boolean, camState: 
     if (avatarState && camState) {
         bigVideo.style.opacity = '0';
         if (currentFocusedPeerId === 'local') {
-            // 【自分の表示】
+            // 自分のアバター表示
             if (needleFrame.src !== AVATAR_URL) needleFrame.src = AVATAR_URL;
-            needleFrame.style.display = 'block';
+            needleFrame.style.display = 'block'; // z-index: 15 で最前面へ
             remoteAvatarWrapper.style.display = 'none';
-            // シールドは不要（自分で遊びたいから！）
-            avatarShield.style.display = 'none';
+            avatarShield.style.display = 'none'; 
         } else {
-            // 【相手の表示】
+            // 相手のアバター表示
             if (mainRemoteAvatar.src !== AVATAR_URL) mainRemoteAvatar.src = AVATAR_URL;
-            remoteAvatarWrapper.style.display = 'block';
+            remoteAvatarWrapper.style.display = 'block'; // z-index: 5
             needleFrame.style.display = 'none';
-            // シールドを表示して相手がボタンを触れないようにする
-            avatarShield.style.display = 'block'; 
+            avatarShield.style.display = 'block'; // 相手の操作だけをシールド(10)で塞ぐ
         }
     } else {
         bigVideo.style.opacity = camState ? '1' : '0';
