@@ -29,13 +29,15 @@ globalStyle.textContent = `
   .chat-msg.me { color: #4facfe; background: rgba(79, 172, 254, 0.1); }
   
   .name-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 18px; font-weight: bold; color: white; display: none; z-index: 2; text-shadow: 0 0 8px rgba(0,0,0,0.9); pointer-events: none; }
+  /* カメラOFFまたはアバターOFF時に名前を出す */
   .camera-off .name-label { display: block; }
   .camera-off video { opacity: 0; }
   
   /* アバター表示用のクラス設定 */
   .avatar-active video { opacity: 0; }
   .remote-avatar-small { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 3; pointer-events: none; }
-  .avatar-active .remote-avatar-small { display: block; }
+  /* アバターとカメラが両方ONのときだけ表示 */
+  .avatar-active.camera-on .remote-avatar-small { display: block; }
 
   #needle-frame, #main-remote-avatar { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; background: #1a1a1a; }
   .video-container { position: relative; height: 120px; min-width: 160px; background: #222; border-radius: 8px; overflow: hidden; cursor: pointer; border: 2px solid #333; flex-shrink: 0; }
@@ -60,7 +62,7 @@ app.innerHTML = `
       </div>
     </div>
     <div id="video-grid" style="height: 140px; background: #000; display: flex; gap: 10px; padding: 10px; overflow-x: auto; align-items: center; border-top: 1px solid #333;">
-      <div id="local-container" class="video-container active-border">
+      <div id="local-container" class="video-container active-border camera-on">
         <video id="local-video" autoplay playsinline muted style="height: 100%; width: 100%; object-fit: cover;"></video>
         <div id="local-name-label" class="name-label"></div>
       </div>
@@ -115,18 +117,19 @@ async function init() {
     
     document.querySelector('#local-container')!.addEventListener('click', () => {
         currentFocusedPeerId = 'local';
-        updateMainDisplay(localStream, isAvatarOn, true);
+        updateMainDisplay(localStream, isAvatarOn, isCameraOn, true);
         document.querySelectorAll('.video-container').forEach(c => c.classList.remove('active-border'));
         document.querySelector('#local-container')!.classList.add('active-border');
     });
   } catch (e) { statusBadge.innerText = "カメラを許可してください"; }
 }
 
-function updateMainDisplay(stream: MediaStream, avatarState: boolean, isMuted: boolean) {
+function updateMainDisplay(stream: MediaStream, avatarState: boolean, camState: boolean, isMuted: boolean) {
     bigVideo.srcObject = stream;
     bigVideo.muted = isMuted;
 
-    if (avatarState) {
+    // アバターON かつ カメラがONの時だけ表示
+    if (avatarState && camState) {
         bigVideo.style.opacity = '0';
         if (currentFocusedPeerId === 'local') {
             if (needleFrame.src !== AVATAR_URL) needleFrame.src = AVATAR_URL;
@@ -138,7 +141,8 @@ function updateMainDisplay(stream: MediaStream, avatarState: boolean, isMuted: b
             needleFrame.style.display = 'none';
         }
     } else {
-        bigVideo.style.opacity = '1';
+        // カメラOFFまたはアバターOFF
+        bigVideo.style.opacity = camState ? '1' : '0';
         needleFrame.style.display = 'none';
         mainRemoteAvatar.style.display = 'none';
     }
@@ -187,14 +191,15 @@ function setupDataEvents(conn: DataConnection) {
 
       const container = document.getElementById(`container-${conn.peer}`);
       if (container) {
-        container.classList.toggle('camera-off', !data.cam);
+        container.classList.toggle('camera-off', !remote.cam);
+        container.classList.toggle('camera-on', remote.cam);
         container.classList.toggle('avatar-active', remote.avatar);
         const label = container.querySelector('.name-label');
         if (label) label.textContent = data.name;
 
-        // 【重要】相手がアバターONならURLを読み込む
+        // 【重要】相手がアバターONかつカメラONならURLを読み込む
         const smallIframe = container.querySelector<HTMLIFrameElement>('.remote-avatar-small')!;
-        if (remote.avatar) {
+        if (remote.avatar && remote.cam) {
             if (smallIframe.src !== AVATAR_URL) smallIframe.src = AVATAR_URL;
         } else {
             smallIframe.src = "about:blank";
@@ -203,7 +208,7 @@ function setupDataEvents(conn: DataConnection) {
 
       if (currentFocusedPeerId === conn.peer && container) {
           const videoEl = container.querySelector('video')!;
-          updateMainDisplay(videoEl.srcObject as MediaStream, remote.avatar, false);
+          updateMainDisplay(videoEl.srcObject as MediaStream, remote.avatar, remote.cam, false);
       }
     }
     if (data.type === 'chat') appendMessage(data.name, data.message);
@@ -214,7 +219,7 @@ function addRemoteVideo(peerId: string, stream: MediaStream) {
   if (document.getElementById(`container-${peerId}`)) return;
   const container = document.createElement('div');
   container.id = `container-${peerId}`;
-  container.className = "video-container";
+  container.className = "video-container camera-on";
   container.innerHTML = `
     <video autoplay playsinline style="height:100%;width:100%;object-fit:cover;"></video>
     <iframe class="remote-avatar-small" src="about:blank" allow="camera; microphone;"></iframe>
@@ -227,7 +232,7 @@ function addRemoteVideo(peerId: string, stream: MediaStream) {
   container.onclick = () => {
     currentFocusedPeerId = peerId;
     const remote = connections.get(peerId);
-    updateMainDisplay(stream, remote?.avatar || false, false);
+    updateMainDisplay(stream, remote?.avatar || false, remote?.cam ?? true, false);
     
     document.querySelectorAll('.video-container').forEach(c => c.classList.remove('active-border'));
     container.classList.add('active-border');
@@ -249,7 +254,7 @@ function removeRemoteVideo(peerId: string) {
 document.querySelector('#avatar-btn')?.addEventListener('click', () => {
   isAvatarOn = !isAvatarOn;
   if (currentFocusedPeerId === 'local') {
-      updateMainDisplay(localStream, isAvatarOn, true);
+      updateMainDisplay(localStream, isAvatarOn, isCameraOn, true);
   }
   const container = document.querySelector('#local-container')!;
   container.classList.toggle('avatar-active', isAvatarOn);
@@ -262,10 +267,19 @@ document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
   if (!track) return;
   isCameraOn = !isCameraOn;
   track.enabled = isCameraOn;
+  
   const container = document.querySelector('#local-container')!;
   container.classList.toggle('camera-off', !isCameraOn);
+  container.classList.toggle('camera-on', isCameraOn);
+  
   document.querySelector('#local-name-label')!.textContent = myName;
   (e.currentTarget as HTMLElement).classList.toggle('off', !isCameraOn);
+
+  // カメラをオフにした時、メイン表示からもアバターを消す
+  if (currentFocusedPeerId === 'local') {
+      updateMainDisplay(localStream, isAvatarOn, isCameraOn, true);
+  }
+  
   broadcastState();
 });
 
