@@ -36,13 +36,13 @@ globalStyle.textContent = `
   .remote-avatar-small { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 3; pointer-events: none; }
   .avatar-active.camera-on .remote-avatar-small { display: block; }
 
-  /* 自分のアバター用iframeを最前面(z-index: 15)にする */
+  /* 自分用アバター: 常に最前面でクリック可能 */
   #needle-frame { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 15; background: #1a1a1a; }
   
-  /* 相手のアバター用iframe */
+  /* 相手用アバター: z-indexを下げて配置 */
   #main-remote-avatar { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; z-index: 5; }
 
-  /* 相手用シールド: 相手用アバター(5)より上で、自分用(15)より下にする */
+  /* 強力なシールド: 相手用アバター(5)の上にかぶせてクリックを遮断 */
   .avatar-shield {
     position: absolute;
     top: 0; left: 0; width: 100%; height: 100%;
@@ -50,6 +50,11 @@ globalStyle.textContent = `
     background: transparent;
     pointer-events: all; 
     display: none;
+  }
+
+  /* 生徒用ガードクラス: iframeそのものへのマウス操作を無効にする */
+  .student-view-only {
+    pointer-events: none !important;
   }
 
   .video-container { position: relative; height: 120px; min-width: 160px; background: #222; border-radius: 8px; overflow: hidden; cursor: pointer; border: 2px solid #333; flex-shrink: 0; }
@@ -67,7 +72,7 @@ app.innerHTML = `
       <iframe id="needle-frame" src="about:blank" allow="camera; microphone;"></iframe>
       
       <div id="remote-avatar-wrapper" style="position:absolute; top:0; left:0; width:100%; height:100%; display:none; z-index: 5;">
-        <iframe id="main-remote-avatar" src="about:blank" allow="camera; microphone;"></iframe>
+        <iframe id="main-remote-avatar" src="about:blank" allow="camera; microphone;" class="student-view-only"></iframe>
         <div id="avatar-shield" class="avatar-shield"></div>
       </div>
       
@@ -143,6 +148,10 @@ async function init() {
   } catch (e) { statusBadge.innerText = "カメラを許可してください"; }
 }
 
+/**
+ * メイン画面の表示を更新する関数
+ * ガードの核となる部分です
+ */
 function updateMainDisplay(stream: MediaStream, avatarState: boolean, camState: boolean, isMuted: boolean) {
     bigVideo.srcObject = stream;
     bigVideo.muted = isMuted;
@@ -150,17 +159,17 @@ function updateMainDisplay(stream: MediaStream, avatarState: boolean, camState: 
     if (avatarState && camState) {
         bigVideo.style.opacity = '0';
         if (currentFocusedPeerId === 'local') {
-            // 自分のアバター表示
+            // 【自分の画面（先生）】
             if (needleFrame.src !== AVATAR_URL) needleFrame.src = AVATAR_URL;
-            needleFrame.style.display = 'block'; // z-index: 15 で最前面へ
+            needleFrame.style.display = 'block';
             remoteAvatarWrapper.style.display = 'none';
-            avatarShield.style.display = 'none'; 
+            avatarShield.style.display = 'none'; // シールドなし
         } else {
-            // 相手のアバター表示
+            // 【相手の画面（生徒）】
             if (mainRemoteAvatar.src !== AVATAR_URL) mainRemoteAvatar.src = AVATAR_URL;
-            remoteAvatarWrapper.style.display = 'block'; // z-index: 5
+            remoteAvatarWrapper.style.display = 'block';
             needleFrame.style.display = 'none';
-            avatarShield.style.display = 'block'; // 相手の操作だけをシールド(10)で塞ぐ
+            avatarShield.style.display = 'block'; // 物理シールドON
         }
     } else {
         bigVideo.style.opacity = camState ? '1' : '0';
