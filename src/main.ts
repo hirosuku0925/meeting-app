@@ -5,7 +5,7 @@ import { setupVoiceChangerButtonHandler } from './voice-changer-dialog'
 import { setupFaceAvatarButtonHandler } from './face-image-avatar-dialog'
 import SettingsManager from './settings-manager'
 
-// --- 1. スタイル (省略なし) ---
+// --- 1. スタイル設定 ---
 const globalStyle = document.createElement('style');
 globalStyle.textContent = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -25,7 +25,7 @@ globalStyle.textContent = `
 `;
 document.head.appendChild(globalStyle);
 
-// --- 2. HTML (省略なし) ---
+// --- 2. HTML構造 ---
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <div style="display: flex; height: 100vh; width: 100%; flex-direction: column;">
@@ -65,19 +65,17 @@ const bigVideo = document.querySelector<HTMLVideoElement>('#big-video')!;
 const localVideo = document.querySelector<HTMLVideoElement>('#local-video')!;
 const videoGrid = document.querySelector<HTMLDivElement>('#video-grid')!;
 const statusBadge = document.querySelector<HTMLDivElement>('#status-badge')!;
-const chatBox = document.querySelector<HTMLDivElement>('#chat-box')!;
-const chatMessages = document.querySelector<HTMLDivElement>('#chat-messages')!;
 const needleFrame = document.querySelector<HTMLIFrameElement>('#needle-frame')!;
 const needleGuard = document.querySelector<HTMLDivElement>('#needle-guard')!;
 
 let localStream: MediaStream;
-let rawCameraStream: MediaStream; // 生のカメラを保存
+let rawCameraStream: MediaStream; 
 let peer: Peer | null = null;
 let myName = "ゲスト";
 let isCameraOn = true;
 let isAvatarOn = false;
 
-// 接続中のPeerを管理（MediaConnectionを保持してストリームを入れ替えるため）
+// 接続中のPeer情報をしっかり保持
 const connections = new Map<string, { call: MediaConnection, data: DataConnection, name: string }>();
 
 // --- 4. 初期化 ---
@@ -126,8 +124,8 @@ function connectToTarget(targetId: string) {
   if (!peer) return;
   const call = peer.call(targetId, localStream);
   const conn = peer.connect(targetId);
-  setupCallEvents(call);
-  setupDataEvents(conn);
+  if(call) setupCallEvents(call);
+  if(conn) setupDataEvents(conn);
 }
 
 function setupCallEvents(call: MediaConnection) {
@@ -137,15 +135,15 @@ function setupCallEvents(call: MediaConnection) {
 
 function setupDataEvents(conn: DataConnection) {
   conn.on('open', () => {
-    const existing = connections.get(conn.peer);
-    if (existing) existing.data = conn;
+    const existing = connections.get(conn.peer) || { call: null as any, data: conn, name: "不明" };
+    existing.data = conn;
+    connections.set(conn.peer, existing);
     conn.send({ type: 'sync', name: myName, cam: isCameraOn, avatar: isAvatarOn });
   });
 
   conn.on('data', (data: any) => {
     const remote = connections.get(conn.peer);
     if (!data || !remote) return;
-
     if (data.type === 'sync' || data.type === 'state-change') {
       remote.name = data.name;
       const container = document.getElementById(`container-${conn.peer}`);
@@ -155,31 +153,21 @@ function setupDataEvents(conn: DataConnection) {
         if (label) label.textContent = data.name;
       }
     }
-    if (data.type === 'chat') appendMessage(data.name, data.message);
   });
 }
 
 function addRemoteVideo(peerId: string, stream: MediaStream, call: MediaConnection) {
   if (document.getElementById(`container-${peerId}`)) return;
-
   const container = document.createElement('div');
   container.id = `container-${peerId}`;
   container.className = "video-container";
   container.innerHTML = `<video autoplay playsinline style="height:100%;width:100%;object-fit:cover;"></video><div class="name-label"></div>`;
   const v = container.querySelector('video')!;
   v.srcObject = stream;
-  videoGrid.appendChild(container);
+  document.querySelector('#video-grid')!.appendChild(container);
 
-  container.onclick = () => {
-    bigVideo.srcObject = stream;
-    bigVideo.muted = false;
-    document.querySelectorAll('.video-container').forEach(c => c.classList.remove('active-border'));
-    container.classList.add('active-border');
-  };
-
-  // connectionsに登録（後でストリームを入れ替えるのに使う）
-  const dataConn = connections.get(peerId)?.data;
-  connections.set(peerId, { call, data: dataConn!, name: "不明" });
+  const existing = connections.get(peerId) || { data: null as any, name: "不明" };
+  connections.set(peerId, { ...existing, call });
 }
 
 function removeRemoteVideo(peerId: string) {
@@ -187,20 +175,8 @@ function removeRemoteVideo(peerId: string) {
   connections.delete(peerId);
 }
 
-// --- 6. ユーザーアクション ---
+// --- 6. アバター同期の核心部分 ---
 
-// カメラボタン
-document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
-  const track = rawCameraStream.getVideoTracks()[0];
-  if (!track) return;
-  isCameraOn = !isCameraOn;
-  track.enabled = isCameraOn;
-  
-  updateLocalUI();
-  broadcastState();
-});
-
-// アバターボタン
 document.querySelector('#avatar-btn')?.addEventListener('click', async (e) => {
   isAvatarOn = !isAvatarOn;
   
@@ -208,29 +184,49 @@ document.querySelector('#avatar-btn')?.addEventListener('click', async (e) => {
     needleFrame.style.display = 'block';
     needleGuard.style.display = 'block';
     bigVideo.style.opacity = '0';
-    // 本来はここでNeedle EngineのcanvasからcaptureStream()したものをlocalStreamにする
-    // 例: localStream = (needleCanvas as any).captureStream(30);
+    
+    // 【重要】Needle EngineのCanvasから映像をキャプチャする
+    setTimeout(() => {
+        const canvas = needleFrame.contentWindow?.document.querySelector('canvas');
+        if (canvas) {
+            // Canvasから映像トラックを取得
+            const avatarStream = (canvas as any).captureStream(30); 
+            const avatarTrack = avatarStream.getVideoTracks()[0];
+            replaceVideoTrack(avatarTrack);
+        }
+    }, 1000); // 起動待ち
+    
   } else {
     needleFrame.style.display = 'none';
     needleGuard.style.display = 'none';
     bigVideo.style.opacity = '1';
-    localStream = rawCameraStream;
+    
+    // 元のカメラ映像に戻す
+    const cameraTrack = rawCameraStream.getVideoTracks()[0];
+    replaceVideoTrack(cameraTrack);
   }
 
   updateLocalUI();
   broadcastState();
-  
-  // ストリームが切り替わったことを相手に反映（replaceTrack）
-  const videoTrack = localStream.getVideoTracks()[0];
-  connections.forEach(conn => {
-    const sender = conn.call.peerConnection.getSenders().find(s => s.track?.kind === 'video');
-    if (sender && videoTrack) sender.replaceTrack(videoTrack);
-  });
 });
+
+// 全員のストリームを入れ替える関数
+function replaceVideoTrack(newTrack: MediaStreamTrack) {
+  connections.forEach(conn => {
+    if (conn.call && conn.call.peerConnection) {
+      const sender = conn.call.peerConnection.getSenders().find(s => s.track?.kind === 'video');
+      if (sender) {
+        sender.replaceTrack(newTrack);
+      }
+    }
+  });
+  // 自分のプレビューも更新
+  const newStream = new MediaStream([newTrack, rawCameraStream.getAudioTracks()[0]]);
+  localVideo.srcObject = newStream;
+}
 
 function updateLocalUI() {
   const container = document.querySelector('#local-container')!;
-  // カメラもアバターもOFFなら名前を出す
   container.classList.toggle('camera-off', !isCameraOn && !isAvatarOn);
   document.querySelector('#local-name-label')!.textContent = myName;
   document.querySelector('#cam-btn')!.classList.toggle('off', !isCameraOn);
@@ -243,32 +239,22 @@ function broadcastState() {
   });
 }
 
-// 以下、参加・チャット等のイベント (省略なし)
+// その他イベント
+document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
+  const track = rawCameraStream.getVideoTracks()[0];
+  isCameraOn = !isCameraOn;
+  track.enabled = isCameraOn;
+  updateLocalUI();
+  broadcastState();
+});
+
 document.querySelector('#join-btn')?.addEventListener('click', () => {
   const room = (document.querySelector('#room-input') as HTMLInputElement).value.trim();
   myName = (document.querySelector('#name-input') as HTMLInputElement).value.trim() || "名無し";
-  if (!room) return alert("部屋名を入れてください");
-  SettingsManager.setUserName(myName);
-  SettingsManager.setLastRoomName(room);
+  if (!room) return alert("部屋名を入れてね");
   joinRoom(`vFINAL-${room}`, 1);
 });
 
-document.querySelector('#chat-send-btn')?.addEventListener('click', () => {
-  const input = document.querySelector<HTMLInputElement>('#chat-input')!;
-  if (!input.value.trim()) return;
-  connections.forEach(c => c.data?.open && c.data.send({ type: 'chat', name: myName, message: input.value }));
-  appendMessage("自分", input.value, true);
-  input.value = "";
-});
-
 document.querySelector('#exit-btn')?.addEventListener('click', () => location.reload());
-
-function appendMessage(sender: string, text: string, isMe = false) {
-  const div = document.createElement('div');
-  div.className = `chat-msg ${isMe ? 'me' : ''}`;
-  div.innerHTML = `<strong>${sender}:</strong> ${text}`;
-  chatMessages.appendChild(div);
-  chatMessages.scrollTop = chatMessages.scrollHeight;
-}
 
 init();
