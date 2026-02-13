@@ -32,20 +32,19 @@ globalStyle.textContent = `
   .camera-off .name-label { display: block; }
   .camera-off video { opacity: 0; }
   
-  /* アバター表示用のクラス設定 */
   .avatar-active video { opacity: 0; }
   .remote-avatar-small { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 3; pointer-events: none; }
   .avatar-active.camera-on .remote-avatar-small { display: block; }
 
   #needle-frame, #main-remote-avatar { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 5; background: #1a1a1a; }
   
-  /* 【重要】相手がボタンを触れないようにするシールド */
+  /* 透明なシールド: z-indexを高くしてクリックを遮断 */
   .avatar-shield {
     position: absolute;
     top: 0; left: 0; width: 100%; height: 100%;
-    z-index: 10; /* アバターより手前に配置 */
+    z-index: 10;
     background: transparent;
-    pointer-events: all; /* すべてのクリックをここで止める */
+    pointer-events: all; 
     display: none;
   }
 
@@ -60,6 +59,7 @@ app.innerHTML = `
   <div style="display: flex; height: 100vh; width: 100%; flex-direction: column;">
     <div id="main-display" style="flex: 1; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
       <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain;"></video>
+      
       <iframe id="needle-frame" src="about:blank" allow="camera; microphone;"></iframe>
       
       <div id="remote-avatar-wrapper" style="position:absolute; top:0; left:0; width:100%; height:100%; display:none;">
@@ -146,16 +146,19 @@ function updateMainDisplay(stream: MediaStream, avatarState: boolean, camState: 
     if (avatarState && camState) {
         bigVideo.style.opacity = '0';
         if (currentFocusedPeerId === 'local') {
-            // 自分のアバター（操作可能）
+            // 【自分の表示】
             if (needleFrame.src !== AVATAR_URL) needleFrame.src = AVATAR_URL;
             needleFrame.style.display = 'block';
             remoteAvatarWrapper.style.display = 'none';
+            // シールドは不要（自分で遊びたいから！）
+            avatarShield.style.display = 'none';
         } else {
-            // 相手のアバター（シールドで操作禁止）
+            // 【相手の表示】
             if (mainRemoteAvatar.src !== AVATAR_URL) mainRemoteAvatar.src = AVATAR_URL;
             remoteAvatarWrapper.style.display = 'block';
-            avatarShield.style.display = 'block'; // シールドを表示
             needleFrame.style.display = 'none';
+            // シールドを表示して相手がボタンを触れないようにする
+            avatarShield.style.display = 'block'; 
         }
     } else {
         bigVideo.style.opacity = camState ? '1' : '0';
