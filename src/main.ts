@@ -1,6 +1,5 @@
 import './style.css'
 import { Peer, MediaConnection, DataConnection } from 'peerjs'
-import voiceChangerManager from './voice-changer-manager' 
 import { setupVoiceChangerButtonHandler } from './voice-changer-dialog'
 import { setupFaceAvatarButtonHandler } from './face-image-avatar-dialog'
 import SettingsManager from './settings-manager'
@@ -27,7 +26,6 @@ globalStyle.textContent = `
   .ctrl-group { display: flex; flex-direction: column; align-items: center; font-size: 10px; color: #888; gap: 4px; }
   .chat-msg { margin-bottom: 5px; word-break: break-all; padding: 4px; border-radius: 4px; background: rgba(255,255,255,0.05); }
   .chat-msg.me { color: #4facfe; background: rgba(79, 172, 254, 0.1); }
-  
   .name-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 18px; font-weight: bold; color: white; display: none; z-index: 2; text-shadow: 0 0 8px rgba(0,0,0,0.9); pointer-events: none; }
   .camera-off .name-label { display: block; }
   .camera-off video { opacity: 0; }
