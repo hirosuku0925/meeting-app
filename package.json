@@ -1,30 +1,17 @@
 {
   "name": "avatar-classroom",
   "version": "1.0.0",
-  "main": "main.js",
   "description": "授業用アバター会議アプリ",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "electron": "electron .",
-    "dist": "npm run build && electron-builder"
+    "build": "vite build",
+    "preview": "vite preview"
   },
-  "build": {
-    "appId": "com.example.avatarclassroom",
-    "productName": "アバター教室",
-    "files": [
-      "dist/**/*",
-      "main.js"
-    ],
-    "directories": {
-      "output": "release"
-    },
-    "win": {
-      "target": "nsis"
-    },
-    "mac": {
-      "target": "dmg"
-    }
+  "dependencies": {
+    "peerjs": "^1.5.2",
+    "vite": "^5.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
   }
 }
