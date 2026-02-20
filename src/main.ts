@@ -20,7 +20,6 @@ globalStyle.textContent = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body, html { width: 100%; height: 100%; overflow: hidden; background: #000; color: white; font-family: sans-serif; }
   .tool-btn { background: #333; border: none; color: white; font-size: 18px; width: 45px; height: 45px; border-radius: 50%; cursor: pointer; transition: 0.2s; display: flex; align-items: center; justify-content: center; }
-  .tool-btn:hover { background: #444; transform: scale(1.1); }
   .tool-btn.active { background: #4facfe !important; }
   .tool-btn.off { background: #ea4335 !important; }
   .ctrl-group { display: flex; flex-direction: column; align-items: center; font-size: 10px; color: #888; gap: 4px; }
@@ -29,26 +28,10 @@ globalStyle.textContent = `
   .name-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 18px; font-weight: bold; color: white; display: none; z-index: 2; text-shadow: 0 0 8px rgba(0,0,0,0.9); pointer-events: none; }
   .camera-off .name-label { display: block; }
   .camera-off video { opacity: 0; }
-  
-  .avatar-active video { opacity: 0; }
-  .remote-avatar-small { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; z-index: 3; pointer-events: none; }
-  .avatar-active.camera-on .remote-avatar-small { display: block; }
-
-  /* 共通のメイン表示エリア */
-  #main-remote-avatar { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; z-index: 5; pointer-events: none; }
-
-  /* 最強シールド: 画面上のクリックをすべて吸い取る（z-index 1000） */
-  .avatar-shield {
-    position: absolute;
-    top: 0; left: 0; width: 100%; height: 100%;
-    z-index: 1000;
-    background: transparent;
-    pointer-events: all; 
-    display: none;
-  }
-
   .video-container { position: relative; height: 120px; min-width: 160px; background: #222; border-radius: 8px; overflow: hidden; cursor: pointer; border: 2px solid #333; flex-shrink: 0; }
   .video-container.active-border { border-color: #4facfe; }
+  #main-remote-avatar { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; z-index: 5; pointer-events: none; }
+  .avatar-shield { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1000; background: transparent; pointer-events: all; display: none; }
 `;
 document.head.appendChild(globalStyle);
 
@@ -58,12 +41,10 @@ app.innerHTML = `
   <div style="display: flex; height: 100vh; width: 100%; flex-direction: column;">
     <div id="main-display" style="flex: 1; position: relative; background: #1a1a1a; display: flex; align-items: center; justify-content: center; overflow: hidden;">
       <video id="big-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: contain; z-index: 1;"></video>
-      
       <div id="remote-avatar-wrapper" style="position:absolute; top:0; left:0; width:100%; height:100%; display:none; z-index: 5;">
         <iframe id="main-remote-avatar" src="about:blank" allow="camera; microphone;"></iframe>
         <div id="avatar-shield" class="avatar-shield"></div>
       </div>
-      
       <div id="status-badge" style="position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 20px; border: 1px solid #4facfe; font-size: 12px; z-index: 2000;">準備中...</div>
       <div id="chat-box" style="display:none; position: absolute; right: 10px; top: 10px; bottom: 10px; width: 250px; background: rgba(20,20,20,0.95); border-radius: 8px; flex-direction: column; border: 1px solid #444; z-index: 3000;">
         <div style="padding: 10px; border-bottom: 1px solid #444; font-size: 13px; font-weight: bold;">チャット</div>
@@ -74,10 +55,9 @@ app.innerHTML = `
     <div id="video-grid" style="height: 140px; background: #000; display: flex; gap: 10px; padding: 10px; overflow-x: auto; align-items: center; border-top: 1px solid #333;">
       <div id="local-container" class="video-container active-border camera-on">
         <video id="local-video" autoplay playsinline muted style="height: 100%; width: 100%; object-fit: cover;"></video>
-        <div id="local-name-label" class="name-label"></div>
       </div>
     </div>
-    <div id="toolbar" style="height: 80px; background: #111; display: flex; align-items: center; justify-content: center; gap: 15px; border-top: 1px solid #333; padding: 0 10px; z-index: 4000;">
+    <div id="toolbar" style="height: 80px; background: #111; display: flex; align-items: center; justify-content: center; gap: 15px; border-top: 1px solid #333;">
       <div class="ctrl-group"><button id="mic-btn" class="tool-btn">🎤</button><span>マイク</span></div>
       <div class="ctrl-group"><button id="cam-btn" class="tool-btn">📹</button><span>カメラ</span></div>
       <div class="ctrl-group"><button id="chat-toggle-btn" class="tool-btn">💬</button><span>チャット</span></div>
@@ -111,57 +91,60 @@ let currentFocusedPeerId = 'local';
 
 const connections = new Map<string, RemoteUser>();
 
-// --- 4. 初期化 ---
+// --- 4. 画面表示の核 (バグ修正済み) ---
+function refreshMainDisplay() {
+    if (currentFocusedPeerId === 'local') {
+        updateMainDisplay(localStream, isAvatarOn, isCameraOn, true);
+    } else {
+        const remote = connections.get(currentFocusedPeerId);
+        const container = document.getElementById(`container-${currentFocusedPeerId}`);
+        const videoEl = container?.querySelector('video');
+        if (remote && videoEl && videoEl.srcObject instanceof MediaStream) {
+            // 相手を映すときは「アバターOFF」として扱う (相手の映像にアバターが含まれているため)
+            updateMainDisplay(videoEl.srcObject, false, remote.cam, false);
+        }
+    }
+}
+
+function updateMainDisplay(stream: MediaStream, avatarState: boolean, camState: boolean, isMuted: boolean) {
+    bigVideo.srcObject = stream;
+    bigVideo.muted = isMuted;
+
+    // 「自分」かつ「アバターON」の時だけ共通iframeを使う
+    if (currentFocusedPeerId === 'local' && avatarState && camState) {
+        bigVideo.style.opacity = '0';
+        if (mainRemoteAvatar.src !== AVATAR_URL) mainRemoteAvatar.src = AVATAR_URL;
+        remoteAvatarWrapper.style.display = 'block';
+        avatarShield.style.display = 'block'; 
+    } else {
+        // 相手がアバター中でも、ここには相手のビデオをそのまま出す
+        bigVideo.style.opacity = camState ? '1' : '0';
+        remoteAvatarWrapper.style.display = 'none';
+        avatarShield.style.display = 'none';
+        mainRemoteAvatar.src = "about:blank"; // 重要：中身を消して割り込みを防ぐ
+    }
+}
+
+// --- 5. 初期化 ---
 async function init() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     localVideo.srcObject = localStream;
     bigVideo.srcObject = localStream;
     
-    const nameInput = document.querySelector<HTMLInputElement>('#name-input')!;
-    const roomInput = document.querySelector<HTMLInputElement>('#room-input')!;
-    nameInput.value = SettingsManager.getUserName() || "";
-    roomInput.value = SettingsManager.getLastRoomName() || "";
-    
     setupFaceAvatarButtonHandler('avatar-btn');
     setupVoiceChangerButtonHandler();
     
     document.querySelector('#local-container')!.addEventListener('click', () => {
         currentFocusedPeerId = 'local';
-        updateMainDisplay(localStream, isAvatarOn, isCameraOn, true);
+        refreshMainDisplay();
         document.querySelectorAll('.video-container').forEach(c => c.classList.remove('active-border'));
         document.querySelector('#local-container')!.classList.add('active-border');
     });
   } catch (e) { statusBadge.innerText = "カメラを許可してください"; }
 }
 
-/**
- * メイン画面表示の核：
- * 自分・相手に関わらず、アバターが出ている時はシールドを絶対に出す
- */
-function updateMainDisplay(stream: MediaStream, avatarState: boolean, camState: boolean, isMuted: boolean) {
-    bigVideo.srcObject = stream;
-    bigVideo.muted = isMuted;
-
-    if (avatarState && camState) {
-        bigVideo.style.opacity = '0';
-        
-        // アバター表示（共通iframe）
-        if (mainRemoteAvatar.src !== AVATAR_URL) mainRemoteAvatar.src = AVATAR_URL;
-        remoteAvatarWrapper.style.display = 'block';
-
-        // 鉄壁ガード：自分であってもシールドを表示してクリックを遮断する
-        avatarShield.style.display = 'block'; 
-        
-    } else {
-        // アバターOFFの時はビデオを表示
-        bigVideo.style.opacity = camState ? '1' : '0';
-        remoteAvatarWrapper.style.display = 'none';
-        avatarShield.style.display = 'none';
-    }
-}
-
-// --- 5. 接続ロジック ---
+// --- 6. 接続ロジック ---
 function joinRoom(roomKey: string, seat: number) {
   if (peer) peer.destroy();
   peer = new Peer(`${roomKey}-${seat}`);
@@ -174,7 +157,6 @@ function joinRoom(roomKey: string, seat: number) {
     setupCallEvents(call);
   });
   peer.on('connection', (conn: DataConnection) => setupDataEvents(conn));
-  peer.on('error', (err: any) => { if (err.type === 'unavailable-id') joinRoom(roomKey, seat + 1); });
 }
 
 function connectToTarget(targetId: string) {
@@ -201,29 +183,15 @@ function setupDataEvents(conn: DataConnection) {
       remote.name = data.name;
       remote.avatar = !!data.avatar;
       remote.cam = !!data.cam;
-
       const container = document.getElementById(`container-${conn.peer}`);
       if (container) {
         container.classList.toggle('camera-off', !remote.cam);
-        container.classList.toggle('camera-on', remote.cam);
-        container.classList.toggle('avatar-active', remote.avatar);
         const label = container.querySelector('.name-label');
-        if (label) label.textContent = data.name;
-
-        const smallIframe = container.querySelector<HTMLIFrameElement>('.remote-avatar-small')!;
-        if (remote.avatar && remote.cam) {
-            if (smallIframe.src !== AVATAR_URL) smallIframe.src = AVATAR_URL;
-        } else {
-            smallIframe.src = "about:blank";
-        }
+        if (label) label.textContent = remote.name;
       }
-
-      if (currentFocusedPeerId === conn.peer && container) {
-          const videoEl = container.querySelector('video')!;
-          updateMainDisplay(videoEl.srcObject as MediaStream, remote.avatar, remote.cam, false);
-      }
+      if (currentFocusedPeerId === conn.peer) refreshMainDisplay();
     }
-    if (data.type === 'chat') appendMessage(data.name, data.message);
+    if (data.type === 'chat' && data.message) appendMessage(data.name, data.message);
   });
 }
 
@@ -232,20 +200,14 @@ function addRemoteVideo(peerId: string, stream: MediaStream) {
   const container = document.createElement('div');
   container.id = `container-${peerId}`;
   container.className = "video-container camera-on";
-  container.innerHTML = `
-    <video autoplay playsinline style="height:100%;width:100%;object-fit:cover;"></video>
-    <iframe class="remote-avatar-small" src="about:blank" allow="camera; microphone;"></iframe>
-    <div class="name-label"></div>
-  `;
+  container.innerHTML = `<video autoplay playsinline style="height:100%;width:100%;object-fit:cover;"></video><div class="name-label"></div>`;
   const v = container.querySelector('video')!;
   v.srcObject = stream;
   videoGrid.appendChild(container);
   
   container.onclick = () => {
     currentFocusedPeerId = peerId;
-    const remote = connections.get(peerId);
-    updateMainDisplay(stream, remote?.avatar || false, remote?.cam ?? true, false);
-    
+    refreshMainDisplay();
     document.querySelectorAll('.video-container').forEach(c => c.classList.remove('active-border'));
     container.classList.add('active-border');
   };
@@ -255,21 +217,13 @@ function addRemoteVideo(peerId: string, stream: MediaStream) {
 function removeRemoteVideo(peerId: string) {
   document.getElementById(`container-${peerId}`)?.remove();
   connections.delete(peerId);
-  if (currentFocusedPeerId === peerId) {
-      const localBtn = document.querySelector<HTMLElement>('#local-container');
-      if (localBtn) localBtn.click();
-  }
+  if (currentFocusedPeerId === peerId) document.querySelector<HTMLElement>('#local-container')?.click();
 }
 
-// --- 6. ユーザーアクション ---
-
+// --- 7. アクション ---
 document.querySelector('#avatar-btn')?.addEventListener('click', () => {
   isAvatarOn = !isAvatarOn;
-  if (currentFocusedPeerId === 'local') {
-      updateMainDisplay(localStream, isAvatarOn, isCameraOn, true);
-  }
-  const container = document.querySelector('#local-container')!;
-  container.classList.toggle('avatar-active', isAvatarOn);
+  refreshMainDisplay();
   document.querySelector('#avatar-btn')!.classList.toggle('active', isAvatarOn);
   broadcastState();
 });
@@ -279,57 +233,30 @@ document.querySelector('#cam-btn')?.addEventListener('click', (e) => {
   if (!track) return;
   isCameraOn = !isCameraOn;
   track.enabled = isCameraOn;
-  
-  const container = document.querySelector('#local-container')!;
-  container.classList.toggle('camera-off', !isCameraOn);
-  container.classList.toggle('camera-on', isCameraOn);
-  
-  document.querySelector('#local-name-label')!.textContent = myName;
+  document.querySelector('#local-container')!.classList.toggle('camera-off', !isCameraOn);
   (e.currentTarget as HTMLElement).classList.toggle('off', !isCameraOn);
-
-  if (currentFocusedPeerId === 'local') {
-      updateMainDisplay(localStream, isAvatarOn, isCameraOn, true);
-  }
-  
+  refreshMainDisplay();
   broadcastState();
 });
 
 function broadcastState() {
   connections.forEach(c => {
-    if (c.data?.open) {
-        c.data.send({ type: 'state-toggle', name: myName, cam: isCameraOn, avatar: isAvatarOn });
-    }
+    if (c.data?.open) c.data.send({ type: 'state-toggle', name: myName, cam: isCameraOn, avatar: isAvatarOn });
   });
 }
 
 document.querySelector('#join-btn')?.addEventListener('click', () => {
-  const roomInput = document.querySelector<HTMLInputElement>('#room-input')!;
-  const nameInput = document.querySelector<HTMLInputElement>('#name-input')!;
-  const room = roomInput.value.trim();
-  myName = nameInput.value.trim() || "名無し";
-  if (!room) return alert("部屋名を入力してください");
-  SettingsManager.setUserName(myName);
-  SettingsManager.setLastRoomName(room);
-  joinRoom(`vFINAL-${room}`, 1);
+  const r = document.querySelector<HTMLInputElement>('#room-input')!.value.trim();
+  myName = document.querySelector<HTMLInputElement>('#name-input')!.value.trim() || "名無し";
+  if (r) joinRoom(`vFINAL-${r}`, 1);
 });
 
 document.querySelector('#chat-send-btn')?.addEventListener('click', () => {
-  const input = document.querySelector<HTMLInputElement>('#chat-input')!;
-  if (!input.value.trim()) return;
-  connections.forEach(c => c.data?.open && c.data.send({ type: 'chat', name: myName, message: input.value }));
-  appendMessage("自分", input.value, true);
-  input.value = "";
-});
-
-document.querySelector('#mic-btn')?.addEventListener('click', (e) => {
-    const track = localStream.getAudioTracks()[0];
-    if (track) track.enabled = !track.enabled;
-    (e.currentTarget as HTMLElement).classList.toggle('off', !track?.enabled);
-});
-
-document.querySelector('#exit-btn')?.addEventListener('click', () => location.reload());
-document.querySelector('#chat-toggle-btn')?.addEventListener('click', () => {
-  chatBox.style.display = chatBox.style.display === 'none' ? 'flex' : 'none';
+  const i = document.querySelector<HTMLInputElement>('#chat-input')!;
+  if (!i.value.trim()) return;
+  connections.forEach(c => c.data?.open && c.data.send({ type: 'chat', name: myName, message: i.value }));
+  appendMessage("自分", i.value, true);
+  i.value = "";
 });
 
 function appendMessage(sender: string, text: string, isMe = false) {
